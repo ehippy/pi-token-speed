@@ -12,11 +12,14 @@ export type SparklineColorMode = "tier" | "head" | "mono";
 /**
  * Vertical scale of the bars.
  *
- * - `relative`: tallest bar in view is full height (shape is emphasized)
+ * - `relative`: tallest bar in view is full height (shape is emphasized, but
+ *   the whole graph rescales when that bar scrolls away)
+ * - `peak`: held high watermark that relaxes over time (stable heights, no
+ *   sudden rescaling)
  * - `absolute`: `thresholds.blazing` is full height (height is comparable
  *   across turns, bars above the ceiling clamp)
  */
-export type SparklineScale = "relative" | "absolute";
+export type SparklineScale = "relative" | "peak" | "absolute";
 
 /**
  * How a bar with no tokens (a stall or idle slot) is drawn.
@@ -29,8 +32,16 @@ export type SparklineGap = "low" | "blank";
 export const SPARKLINE_BARS_DEFAULT = 20;
 export const SPARKLINE_BAR_MS_DEFAULT = 500;
 export const SPARKLINE_COLOR_MODE_DEFAULT: SparklineColorMode = "tier";
-export const SPARKLINE_SCALE_DEFAULT: SparklineScale = "relative";
+export const SPARKLINE_SCALE_DEFAULT: SparklineScale = "peak";
 export const SPARKLINE_GAP_DEFAULT: SparklineGap = "low";
+
+/**
+ * Half-life of the held `peak` ceiling: how long an unchallenged peak takes to
+ * fall to half height. Matches the time span the graph shows, so the scale
+ * relaxes on the same clock as the history scrolling past it.
+ */
+export const SPARKLINE_HISTORY_MS_DEFAULT =
+  SPARKLINE_BARS_DEFAULT * SPARKLINE_BAR_MS_DEFAULT;
 
 const SPARKLINE_COLOR_MODE_LABELS: Record<SparklineColorMode, string> = {
   tier: "Per-bar tiers",
@@ -39,7 +50,8 @@ const SPARKLINE_COLOR_MODE_LABELS: Record<SparklineColorMode, string> = {
 };
 
 const SPARKLINE_SCALE_LABELS: Record<SparklineScale, string> = {
-  relative: "Relative to peak",
+  relative: "Peak in view",
+  peak: "Peak hold (relaxes)",
   absolute: "Absolute (blazing = full)",
 };
 
@@ -83,7 +95,7 @@ export class SparklineScaleSettingsItem extends ScalarSettingsItem<SparklineScal
       id: "sparklineScale",
       label: "Sparkline scale",
       description:
-        "Scale bars against the peak in view, or against the blazing threshold",
+        "Scale bars against the peak in view, a held peak that relaxes, or the blazing threshold",
       default: SPARKLINE_SCALE_DEFAULT,
       labels: SPARKLINE_SCALE_LABELS,
     });

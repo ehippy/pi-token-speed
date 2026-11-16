@@ -312,33 +312,36 @@ describe("TokenSpeedEngine", () => {
 
   // ---- sparkline history ----
 
-  describe("sparkline history", () => {
-    /** Engine on a clock aligned with the default 500 ms bar width. */
-    const clocked = () => {
-      const testEngine = new TimeMockedEngine(settings, 1_000_000);
-      testEngine.initialize();
-      testEngine.start();
-      return testEngine;
-    };
+  /** Engine on a clock aligned with the default 500 ms bar width. */
+  const clocked = () => {
+    const testEngine = new TimeMockedEngine(settings, 1_000_000);
+    testEngine.initialize();
+    testEngine.start();
+    return testEngine;
+  };
 
+  describe("sparkline history", () => {
     it("exposes one bar per configured slot", () => {
       const testEngine = clocked();
-      expect(testEngine.sparklineSeries).toHaveLength(
-        settings.getDefaultConfig().sparklineBars,
-      );
-      expect(testEngine.sparklineSeries.every((bar) => bar.tokens === 0)).toBe(
-        true,
-      );
+      const { bars } = testEngine.sparklineView;
+
+      expect(bars).toHaveLength(settings.getDefaultConfig().sparklineBars);
+      expect(bars.every((bar) => bar.tokens === 0)).toBe(true);
     });
 
-    it("sums tokens into the bar covering their time", () => {
+    it("holds back the slot still being filled, then averages it whole", () => {
       const testEngine = clocked();
       for (let i = 0; i < 5; i++) {
         testEngine.recordDelta("x");
         testEngine.tick(20);
       }
-      // Still inside the bar that started at 1_000_000
-      expect(testEngine.sparklineSeries.at(-1)!.tokens).toBe(5);
+      // 1_000_100: still inside the bar that started at 1_000_000
+      expect(testEngine.sparklineView.bars.at(-1)!.tokens).toBe(0);
+
+      testEngine.tick(400); // the bar closes and is averaged over 500 ms
+      const newest = testEngine.sparklineView.bars.at(-1)!;
+      expect(newest.tokens).toBe(5);
+      expect(newest.tps).toBe(10);
     });
 
     it("leaves empty bars for stalls rather than blending them", () => {
@@ -347,32 +350,42 @@ describe("TokenSpeedEngine", () => {
         testEngine.recordDelta("x");
         testEngine.tick(20);
       }
-      testEngine.tick(2_000); // jump five bars ahead
+      testEngine.tick(2_000); // jump four bars ahead
       testEngine.recordDelta("x");
 
-      const tokens = testEngine.sparklineSeries.map((bar) => bar.tokens);
-      expect(tokens.at(-1)).toBe(1);
-      expect(tokens.slice(-4, -1)).toEqual([0, 0, 0]);
-      expect(tokens.at(-5)).toBe(5);
+      const tokens = testEngine.sparklineView.bars.map((bar) => bar.tokens);
+      expect(tokens.at(-4)).toBe(5);
+      expect(tokens.slice(-3)).toEqual([0, 0, 0]);
     });
 
-    it("keeps history across a finished stream and clears it on initialize", () => {
+    it("keeps history across a finished stream and a settings change", () => {
       const testEngine = clocked();
       testEngine.recordDelta("hello there");
-      testEngine.stop();
-      expect(testEngine.sparklineSeries.some((bar) => bar.tokens > 0)).toBe(
+      testEngine.tick(500); // close the bar so it becomes visible
+
+      expect(testEngine.sparklineView.bars.some((bar) => bar.tokens > 0)).toBe(
         true,
       );
 
+      testEngine.stop();
+      expect(testEngine.sparklineView.bars.some((bar) => bar.tokens > 0)).toBe(
+        true,
+      );
+
+      // The settings menu calls this on every change; unrelated tweaks must
+      // not blank a graph the user is watching.
       testEngine.initialize();
-      expect(testEngine.sparklineSeries.some((bar) => bar.tokens > 0)).toBe(
-        false,
+      expect(testEngine.sparklineView.bars.some((bar) => bar.tokens > 0)).toBe(
+        true,
       );
     });
 
-    it("adopts bar geometry from a provider override", () => {
-      const testEngine = new TimeMockedEngine(settings, 1_000_000);
-      testEngine.initialize();
+    it("drops history when a provider override changes the bar geometry", () => {
+      const testEngine = clocked();
+      testEngine.recordDelta("hello there");
+      testEngine.tick(500);
+      testEngine.stop();
+
       vi.spyOn(settings, "resolveConfig").mockReturnValue({
         ...settings.getDefaultConfig(),
         sparklineBars: 6,
@@ -380,7 +393,73 @@ describe("TokenSpeedEngine", () => {
       });
 
       testEngine.applyProvider("openai"); // idle, so the override applies
-      expect(testEngine.sparklineSeries).toHaveLength(6);
+
+      const { bars } = testEngine.sparklineView;
+      expect(bars).toHaveLength(6);
+      expect(bars.every((bar) => bar.tokens === 0)).toBe(true);
+    });
+  });
+
+  // ---- sparkline vertical scale ----
+
+  describe("sparkline ceiling", () => {
+    /** Streams `tokens` into one bar and closes it. */
+    const burst = (testEngine: TimeMockedEngine, tokens: number) => {
+      for (let i = 0; i < tokens; i++) {
+        testEngine.recordDelta("x");
+        testEngine.tick(10);
+      }
+      testEngine.tick(500); // close the bar holding them
+    };
+
+    it("lifts to the tallest bar as soon as it appears", () => {
+      const testEngine = clocked();
+      burst(testEngine, 5); // 5 tokens / 0.5s
+
+      expect(testEngine.sparklineView.ceiling).toBe(10);
+    });
+
+    it("holds the peak while the tallest bar is still on screen", () => {
+      const testEngine = clocked();
+      burst(testEngine, 5);
+      testEngine.tick(3_000);
+
+      expect(testEngine.sparklineView.bars.some((bar) => bar.tps === 10)).toBe(
+        true,
+      );
+      expect(testEngine.sparklineView.ceiling).toBe(10);
+    });
+
+    it("relaxes the peak over one half-life instead of snapping", () => {
+      const { sparklineBars: count, sparklineBarMs: barMs } =
+        settings.getDefaultConfig();
+      const halfLife = count * barMs;
+      const testEngine = clocked();
+      burst(testEngine, 5);
+
+      // Sample as a render loop would while the tall bar stays in view: the
+      // ceiling holds at that bar's rate rather than tracking the average.
+      for (let i = 1; i < count; i++) {
+        testEngine.tick(barMs);
+        expect(testEngine.sparklineView.ceiling).toBe(10);
+      }
+
+      testEngine.tick(barMs); // the tall bar scrolls out of the window
+      const stepped = 10 * 0.5 ** (barMs / halfLife);
+      expect(testEngine.sparklineView.bars.some((bar) => bar.tokens > 0)).toBe(
+        false,
+      );
+      expect(testEngine.sparklineView.ceiling).toBeCloseTo(stepped, 6);
+
+      testEngine.tick(halfLife);
+      expect(testEngine.sparklineView.ceiling).toBeCloseTo(stepped * 0.5, 6);
+    });
+
+    it("lets a faster bar take over the ceiling immediately", () => {
+      const testEngine = clocked();
+      burst(testEngine, 20); // 40 tok/s
+
+      expect(testEngine.sparklineView.ceiling).toBe(40);
     });
   });
 });

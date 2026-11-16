@@ -11,8 +11,8 @@ import type {
 } from "../config/types";
 import { TokenSpeedEngine } from "../core/engine";
 import { type DisplayMode } from "../settings/items/display";
-import { type TokenBar } from "../sparkline/bars";
-import { renderCells } from "../sparkline/render";
+import { type SparklineView } from "../sparkline/bars";
+import { renderCells, resolveCeiling } from "../sparkline/render";
 import { truecolor } from "./ansi";
 
 /**
@@ -36,8 +36,8 @@ interface SuffixContext {
   ttft: number;
   tokens: number;
   elapsed: number;
-  /** TPS history for the sparkline mode. */
-  bars: readonly TokenBar[];
+  /** TPS history and held vertical scale for the sparkline mode. */
+  sparkline: SparklineView;
   config: TokenSpeedConfig;
 }
 
@@ -226,8 +226,8 @@ export class Renderer {
       const close = this.colorOrTheme(")", "", opts);
       return ` ${open}${this.formatStats(tokens, elapsed, opts)}${close}\u200b`;
     },
-    sparkline: ({ bars, config }, opts) =>
-      ` ${this.renderSparkline(bars, config, opts)}\u200b`,
+    sparkline: ({ sparkline, config }, opts) =>
+      ` ${this.renderSparkline(sparkline, config, opts)}\u200b`,
     full: ({ ttft, tokens, elapsed }, opts) => {
       const open = this.colorOrTheme("(", "", opts);
       const stats = this.formatStats(tokens, elapsed, opts);
@@ -262,9 +262,10 @@ export class Renderer {
         tokens,
         elapsed,
         config,
-        // Read lazily: only the sparkline mode pays for building the series
-        get bars() {
-          return engine.sparklineSeries;
+        // Read lazily: only the sparkline mode pays for building the history,
+        // and only it advances the held peak's decay.
+        get sparkline() {
+          return engine.sparklineView;
         },
       },
       opts,
@@ -274,24 +275,25 @@ export class Renderer {
   /**
    * Renders the TPS history as block glyphs, one per fixed-width time bar.
    *
-   * @param bars Fixed-width bars from the engine, oldest first.
-   * @param config The resolved config (scale, gap, tier colors, bar count).
+   * @param view Completed bars and held peak from the engine, oldest first.
+   * @param config The resolved config (scale, gap, tier colors, thresholds).
    * @param opts Formatting options for uncolored bars.
    * @returns The sparkline string, oldest bar first.
    */
   private renderSparkline(
-    bars: readonly TokenBar[],
+    view: SparklineView,
     config: TokenSpeedConfig,
     opts: StatsFormatOptions,
   ): string {
-    const cells = renderCells(
-      bars.map(({ tps }) => tps),
-      {
-        scale: config.sparklineScale,
-        ceiling: config.thresholds.blazing,
-        gap: config.sparklineGap,
-      },
-    );
+    const rates = view.bars.map(({ tps }) => tps);
+    const cells = renderCells(rates, {
+      ceiling: resolveCeiling(config.sparklineScale, {
+        rates,
+        sticky: view.ceiling,
+        blazing: config.thresholds.blazing,
+      }),
+      gap: config.sparklineGap,
+    });
     const last = cells.length - 1;
 
     return cells

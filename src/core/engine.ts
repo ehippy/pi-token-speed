@@ -9,7 +9,8 @@ import {
 } from "../settings/items/end-tps-behavior";
 import { SLIDING_WINDOW_DEFAULT } from "../settings/items/sliding-window";
 import { USE_PROVIDER_TOKENS_DEFAULT } from "../settings/items/use-provider-tokens";
-import { TokenBars, type TokenBar } from "../sparkline/bars";
+import { TokenBars, type SparklineView } from "../sparkline/bars";
+import { PeakCeiling } from "../sparkline/ceiling";
 import { SlidingWindow } from "./sliding-window";
 
 const TOKEN_REGEX = /\w+|[^\s\w]/g;
@@ -33,6 +34,7 @@ export class TokenSpeedEngine {
 
   private _slidingWindow: SlidingWindow;
   private _bars = new TokenBars();
+  private _ceiling = new PeakCeiling();
   private _useProviderTokens = USE_PROVIDER_TOKENS_DEFAULT;
   private _countStrategy: CountStrategy = COUNT_STRATEGY_DEFAULT;
   private _endTpsBehavior: EndTpsBehavior = END_TPS_BEHAVIOR_DEFAULT;
@@ -49,9 +51,10 @@ export class TokenSpeedEngine {
   initialize(): void {
     this._providerId = undefined;
     this.applyConfig(this.settings.getConfig());
-    // Sparkline history is session-scoped; configure() above only resets
-    // when the bar geometry changed, so clear it explicitly here.
-    this._bars.reset();
+    // Sparkline history deliberately survives this call. The settings menu
+    // invokes `initialize()` on every change, and unrelated tweaks should not
+    // blank a graph mid-session; bars age out of the window on their own, and
+    // `configure()` clears them when the geometry makes old buckets moot.
   }
 
   /**
@@ -81,6 +84,9 @@ export class TokenSpeedEngine {
   private applyConfig(config: TokenSpeedConfig): void {
     this._slidingWindow = new SlidingWindow(config.slidingWindow);
     this._bars.configure(config.sparklineBarMs, config.sparklineBars);
+    // The held peak relaxes on the same clock the visible history scrolls past
+    // on, so a burst fades from the scale as it fades from the graph.
+    this._ceiling.configure(this._bars.spanMs);
     this._countStrategy = config.countStrategy;
     this._useProviderTokens = config.useProviderTokens;
     this._endTpsBehavior = config.endTpsBehavior;
@@ -188,14 +194,22 @@ export class TokenSpeedEngine {
   }
 
   /**
-   * Returns the sparkline history: fixed-width time bars, oldest first.
+   * Returns the sparkline history plus the vertical scale to draw it against.
    *
-   * Each bar averages the tokens recorded in its own slot, so the shape
-   * absorbs per-delta fluctuation and stalls appear as empty bars. History is
-   * kept across turns and only cleared by `initialize()` or a bar-width change.
+   * Each bar averages the tokens recorded in its own completed slot, so the
+   * shape absorbs per-delta fluctuation and stalls appear as empty bars.
+   * History is kept across turns; only a bar-geometry change clears it.
+   *
+   * Called once per render: the ceiling is the held peak advanced to the
+   * current clock, so it jumps with new highs and then decays rather than
+   * snapping when the tallest bar scrolls out of view.
    */
-  get sparklineSeries(): readonly TokenBar[] {
-    return this._bars.series(this.now());
+  get sparklineView(): SparklineView {
+    const now = this.now();
+    const bars = this._bars.series(now);
+    const observed = bars.reduce((max, bar) => Math.max(max, bar.tps), 0);
+
+    return { bars, ceiling: this._ceiling.update(now, observed) };
   }
 
   /**

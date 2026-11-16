@@ -89,13 +89,28 @@ describe("sparkline settings", () => {
         ),
       ).toBe("Absolute (blazing = full)");
       expect(
+        SETTINGS_ITEMS.sparklineScale.format(
+          configWith({ sparklineScale: "peak" }),
+        ),
+      ).toBe("Peak hold (relaxes)");
+      expect(
         SETTINGS_ITEMS.sparklineGap.format(
           configWith({ sparklineGap: "blank" }),
         ),
       ).toBe("Blank");
     });
 
+    it("defaults to the held peak so heights stay put", () => {
+      expect(SPARKLINE_SCALE_DEFAULT).toBe("peak");
+      expect(SETTINGS_ITEMS.sparklineScale.getDefault()).toBe("peak");
+    });
+
     it("offers the menu a list of labels for enum choices", () => {
+      expect(SETTINGS_ITEMS.sparklineScale.values).toEqual([
+        "Peak in view",
+        "Peak hold (relaxes)",
+        "Absolute (blazing = full)",
+      ]);
       expect(SETTINGS_ITEMS.sparklineGap.values).toEqual([
         "Low block",
         "Blank",

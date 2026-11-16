@@ -16,7 +16,7 @@ const SPARKLINE = {
   sparklineBars: 20,
   sparklineBarMs: 500,
   sparklineColorMode: "tier",
-  sparklineScale: "relative",
+  sparklineScale: "peak",
   sparklineGap: "low",
 } as const;
 
@@ -515,20 +515,26 @@ describe("Renderer", () => {
       "\u2587",
       "\u2588",
     ];
-    const bars = (rates: number[]) =>
-      rates.map((tps) => ({ tokens: tps, tps }));
+    /** Bars plus the held peak, as the engine hands them to the renderer. */
+    const view = (rates: number[], ceiling = 0) => ({
+      bars: rates.map((tps) => ({ tokens: tps, tps })),
+      ceiling,
+    });
     const spark = (
       overrides: Partial<TokenSpeedConfig>,
       rates: number[],
       theme: any = mockTheme,
+      ceiling = 0,
     ): string =>
-      (renderer as any).renderSparkline(bars(rates), makeConfig(overrides), {
-        theme,
-      });
+      (renderer as any).renderSparkline(
+        view(rates, ceiling),
+        makeConfig(overrides),
+        { theme },
+      );
 
     it("renders one block per bar, oldest first", () => {
       expect(spark({ sparklineColorMode: "mono" }, [0, 50, 100])).toBe(
-        `${B[0]}${B[4]}${B[7]}`,
+        `${B[0]}${B[3]}${B[7]}`,
       );
     });
 
@@ -545,7 +551,7 @@ describe("Renderer", () => {
           color === "dim" ? `<dim>${text}` : text,
       };
       const out = spark({ sparklineColorMode: "head" }, [50, 100], dimming);
-      expect(out).toContain(`<dim>${B[4]}`);
+      expect(out).toContain(`<dim>${B[3]}`);
       expect(out).toContain(truecolor(B[7], "#00ccff"));
     });
 
@@ -567,14 +573,41 @@ describe("Renderer", () => {
           { sparklineColorMode: "mono", sparklineScale: "absolute" },
           [50, 100],
         ),
-      ).toBe(`${B[4]}${B[7]}`);
+      ).toBe(`${B[3]}${B[7]}`);
       // A rate above the ceiling clamps instead of re-scaling the series
       expect(
         spark(
           { sparklineColorMode: "mono", sparklineScale: "absolute" },
           [400, 50],
         ),
-      ).toBe(`${B[7]}${B[4]}`);
+      ).toBe(`${B[7]}${B[3]}`);
+    });
+
+    it("scales against the held peak in peak mode", () => {
+      const peak = {
+        sparklineColorMode: "mono",
+        sparklineScale: "peak",
+      } as const;
+
+      // Relative mode lifts whatever is tallest to full height…
+      expect(
+        spark({ sparklineColorMode: "mono", sparklineScale: "relative" }, [50]),
+      ).toBe(B[7]);
+      // …while a held peak of 100 keeps 50 at half, and drops further as the
+      // peak relaxes, without the bars themselves changing.
+      expect(spark(peak, [50], mockTheme, 100)).toBe(B[3]);
+      expect(spark(peak, [50], mockTheme, 400)).toBe(B[0]);
+    });
+
+    it("falls back to the tallest bar before a peak has been seen", () => {
+      expect(
+        spark(
+          { sparklineColorMode: "mono", sparklineScale: "peak" },
+          [0, 100],
+          mockTheme,
+          0,
+        ),
+      ).toBe(`${B[0]}${B[7]}`);
     });
   });
 
@@ -589,7 +622,9 @@ describe("Renderer", () => {
       });
       renderer = new Renderer(engine, settings as any);
 
-      engine.recordDelta("hello there");
+      // Tokens are recorded into the bar being filled, which is only drawn
+      // once it closes, so the graph is seeded one bar back.
+      engine["_bars"].add(120, Date.now() - 500);
       engine["_tps"] = 42.5;
       (renderer as any).render(ctx);
 

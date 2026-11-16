@@ -3,45 +3,55 @@ import {
   SPARKLINE_BARS_DEFAULT,
 } from "../settings/items/sparkline";
 
-/**
- * Shortest span (ms) a bar averages over.
- *
- * A bar is normally averaged over its full width, but the bar being filled
- * right now has only been accumulating since it started. Flooring the span
- * keeps a burst landing in the first milliseconds of a fresh bar — or the
- * very first delta of a stream — from dividing by ~0 and rendering as a
- * full-height spike.
- */
-export const MIN_BAR_SPAN_MS = 50;
-
 /** A single sparkline bar: raw tokens plus the averaged rate for its slot. */
 export interface TokenBar {
   /** Tokens recorded in the bar's time slot. */
   readonly tokens: number;
-  /** Tokens per second, averaged over the bar's time slot. */
+  /** Tokens per second, averaged over the full bar width. */
   readonly tps: number;
+}
+
+/** Everything the sparkline needs to draw: history plus a vertical scale. */
+export interface SparklineView {
+  /** Completed bars, oldest first, `bars` entries long. */
+  readonly bars: readonly TokenBar[];
+  /** Sticky peak rate the bars should be scaled against. */
+  readonly ceiling: number;
 }
 
 /**
  * Fixed-time-bucket token histogram backing the sparkline.
  *
  * Tokens are summed into buckets of a fixed width (`barMs`) keyed by absolute
- * time, then each bucket is divided by its own width to get a rate. Averaging
+ * time, then each bucket is divided by that width to get a rate. Averaging
  * over a fixed slot absorbs the fluctuation of individual deltas, and because
  * slots exist whether or not tokens arrived, a stall shows up as an empty bar
  * instead of being silently skipped.
+ *
+ * Only *completed* buckets are reported: the bucket being filled right now is
+ * excluded, so every bar shown is averaged over an identical span. Reporting
+ * the in-flight bucket instead would overstate the newest bar badly — a chunk
+ * landing in the first 50ms of a 500ms bucket reads as 10x its real rate
+ * before sagging back as the bucket fills — which makes the newest bar pulse on
+ * every boundary. The cost is at most one bar width of lag, which a graph this
+ * coarse does not show.
  *
  * Buckets outside the retained range are dropped, so memory is bounded by
  * `bars` regardless of how long a stream runs.
  */
 export class TokenBars {
   /** Absolute bucket index (`floor(now / barMs)`) → tokens recorded in it. */
-  private readonly buckets = new Map<number, number>();
+  private buckets = new Map<number, number>();
 
   constructor(
     private barMs: number = SPARKLINE_BAR_MS_DEFAULT,
     private bars: number = SPARKLINE_BARS_DEFAULT,
   ) {}
+
+  /** Time covered by the whole retained history, in milliseconds. */
+  get spanMs(): number {
+    return this.barMs * this.bars;
+  }
 
   /**
    * Re-applies bar width and bar count, discarding recorded history.
@@ -49,12 +59,14 @@ export class TokenBars {
    *
    * @param barMs Bar width in milliseconds.
    * @param bars Number of bars retained.
+   * @returns Whether the geometry actually changed.
    */
-  configure(barMs: number, bars: number): void {
-    if (barMs === this.barMs && bars === this.bars) return;
+  configure(barMs: number, bars: number): boolean {
+    if (barMs === this.barMs && bars === this.bars) return false;
     this.barMs = barMs;
     this.bars = bars;
     this.reset();
+    return true;
   }
 
   /**
@@ -70,19 +82,18 @@ export class TokenBars {
     const index = Math.floor(now / this.barMs);
     this.buckets.set(index, (this.buckets.get(index) ?? 0) + tokens);
 
-    const oldest = index - this.bars + 1;
+    const oldest = index - this.bars;
     for (const key of this.buckets.keys()) {
       if (key < oldest) this.buckets.delete(key);
     }
   }
 
   /**
-   * Returns the retained bars, oldest first, always `bars` entries long.
+   * Returns the completed bars covering the retained history, oldest first,
+   * always `bars` entries long.
    *
-   * Completed bars are averaged over the full bar width; the bar covering
-   * `now` is averaged over the time elapsed in it (floored at
-   * {@link MIN_BAR_SPAN_MS}) so the live bar reads as a rate rather than
-   * ramping up from zero as the bar fills. Empty slots become zero bars.
+   * Every bar is averaged over the full bar width, and buckets with no tokens
+   * become zero bars so stalls read as gaps.
    *
    * @param now Current timestamp in milliseconds.
    */
@@ -90,21 +101,9 @@ export class TokenBars {
     const current = Math.floor(now / this.barMs);
     const series: TokenBar[] = [];
 
-    for (let offset = this.bars - 1; offset >= 0; offset--) {
-      const index = current - offset;
-      const tokens = this.buckets.get(index) ?? 0;
-      const span =
-        index === current
-          ? Math.min(
-              Math.max(now - index * this.barMs, MIN_BAR_SPAN_MS),
-              this.barMs,
-            )
-          : this.barMs;
-
-      series.push({
-        tokens,
-        tps: tokens > 0 ? (1000 * tokens) / span : 0,
-      });
+    for (let offset = this.bars; offset >= 1; offset--) {
+      const tokens = this.buckets.get(current - offset) ?? 0;
+      series.push({ tokens, tps: (1000 * tokens) / this.barMs });
     }
 
     return series;
@@ -112,6 +111,6 @@ export class TokenBars {
 
   /** Discards all recorded buckets. */
   reset(): void {
-    this.buckets.clear();
+    this.buckets = new Map();
   }
 }

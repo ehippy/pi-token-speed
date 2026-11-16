@@ -28,7 +28,7 @@ export const defaultConfig: TokenSpeedConfig = {
   sparklineBars: 20,
   sparklineBarMs: 500,
   sparklineColorMode: "tier",
-  sparklineScale: "relative",
+  sparklineScale: "peak",
   sparklineGap: "low",
   providerOverrides: {},
 };

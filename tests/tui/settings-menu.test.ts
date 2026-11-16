@@ -190,7 +190,8 @@ describe("SettingsMenu", () => {
       ]);
       expect(byId.sparklineColorMode.currentValue).toBe("Per-bar tiers");
       expect(byId.sparklineScale.values).toEqual([
-        "Relative to peak",
+        "Peak in view",
+        "Peak hold (relaxes)",
         "Absolute (blazing = full)",
       ]);
       expect(byId.sparklineGap.values).toEqual(["Low block", "Blank"]);

@@ -69,7 +69,7 @@ You can customize the display, speed thresholds and colors by adding a `tokenSpe
     "sparklineBars": 20,
     "sparklineBarMs": 500,
     "sparklineColorMode": "tier",
-    "sparklineScale": "relative",
+    "sparklineScale": "peak",
     "sparklineGap": "low"
   }
 }
@@ -153,7 +153,7 @@ Invalid configuration values are automatically corrected to their defaults. A wa
 | `sparklineBars`      | number (3–60)                               | `20`        | Number of bars in the sparkline (see [Sparkline History](#sparkline-history))                     |
 | `sparklineBarMs`     | number (50–10000)                           | `500`       | Time each bar covers and averages over, in ms                                                     |
 | `sparklineColorMode` | `tier`, `head`, `mono`                      | `tier`      | How sparkline bars are colored                                                                    |
-| `sparklineScale`     | `relative`, `absolute`                      | `relative`  | Bars scaled against the peak in view, or against `thresholds.blazing`                             |
+| `sparklineScale`     | `peak`, `relative`, `absolute`              | `peak`      | Bars scaled against a held peak, the peak in view, or `thresholds.blazing`                        |
 | `sparklineGap`       | `low`, `blank`                              | `low`       | How bars with no tokens (stalls) are drawn                                                        |
 | `displayColors`      | object                                      | `{}`        | Hex colors for the suffix parts (see [Display Color Customization](#display-color-customization)) |
 | `providerOverrides`  | object                                      | `{}`        | Per-provider config overrides (see [Provider Overrides](#provider-overrides))                     |
@@ -331,7 +331,9 @@ Set `display` to `"sparkline"` to append a block graph of recent token speed aft
 
 Each bar covers a **fixed slice of time** (`sparklineBarMs`, default `500` — pick `100`, `250`, `500`, `1000`, `2000` or `5000` in the menu, or any value in `settings.json`) and shows the average rate over that slice. Fixed slices are what make the graph readable: the jitter of individual deltas is averaged away inside each bar, and — unlike a rolling counter — a slot exists whether or not tokens arrived, so a provider stall shows up as a dip instead of being skipped and leaving a stale high bar on screen.
 
-Total history on screen is `sparklineBars × sparklineBarMs` (default `20 × 500ms` = the last 10 seconds). History is kept across turns in a session, so the graph starts filling as soon as the first reply streams; it is cleared when the extension reloads. Changing the bar count or width takes effect at the next session start.
+Only **completed** slices are drawn. The slot currently being filled would have to be divided by the fraction of it that has elapsed, which turns a chunk landing 50ms into a bar into a 10x spike that sags back by the time the bar closes — a visible pulse on the right-hand edge. Leaving it out costs at most one bar width of delay and keeps every bar averaged over exactly the same span.
+
+Total history on screen is `sparklineBars × sparklineBarMs` (default `20 × 500ms` = the last 10 seconds). History is kept across turns in a session, so the graph starts filling as soon as the first reply streams; it is cleared when the extension reloads, and when you change the bar count or width (old buckets are keyed to the old width). Changing anything else in the menu leaves the graph alone.
 
 **Coloring** (`sparklineColorMode`):
 
@@ -339,12 +341,15 @@ Total history on screen is `sparklineBars × sparklineBarMs` (default `20 × 500
 - `head` — only the newest bar is tier-colored, history is dimmed; keeps the eye on the present
 - `mono` — no colors; bars follow `suffixTheme` (or the terminal default)
 
-**Scale** (`sparklineScale`):
+**Scale** (`sparklineScale`) decides what full height means:
 
-- `relative` (default) — the fastest bar in view is drawn full height, so the shape of a single reply is easy to read at any speed
-- `absolute` — `thresholds.blazing` is full height, so bar heights stay comparable between replies and providers (rates above the ceiling clamp to the tallest block)
+- `peak` (default) — a **held high watermark**: it jumps to a new fastest bar immediately, then relaxes exponentially, halving every `sparklineBars × sparklineBarMs` once that bar has scrolled out of view (10s by default). Heights stay comparable, and the graph zooms out smoothly instead of snapping when a burst ages away.
+- `relative` — the fastest bar in view is drawn full height, so the shape of a single reply is easy to read at any speed. Amplifies small variations, and rescales the whole graph at once when the tallest bar scrolls off the left edge.
+- `absolute` — `thresholds.blazing` is full height, so bar heights stay comparable between replies and providers no matter what came before (rates above the ceiling clamp to the tallest block)
 
 **Gaps** (`sparklineGap`) control how a bar with no tokens is drawn: `low` (default) uses the shortest block so a stall reads as a flat line; `blank` uses a space so it reads as a break in the graph.
+
+**Reads as noise?** Three things dominate the trace. `updateInterval` defaults to `0`, redrawing on every delta — `100` or `200` calms it without hiding anything. `useProviderTokens: true` counts provider usage snapshots rather than stream deltas, and those arrive in lumps, so bars fill in bursts with empty slots between; the per-delta count traces a smoother line at the cost of accuracy. And a narrow `sparklineBarMs` makes the graph step sideways twice a second, where `1 s` reads as a slower scroll.
 
 ```json
 {
@@ -472,7 +477,7 @@ The settings menu is described in detail in [Interactive Menu](#interactive-menu
 5. **Sliding Window** — TPS is calculated using a configurable time window of token timestamps. If all events in the window share the same timestamp (a flush after a stall), the span extends backward to include the gap. When streaming ends, behavior depends on `endTpsBehavior`:
    - `average` (default): returns the overall average TPS for consistency with stats.
    - `last`: returns the last sliding window measurement.
-6. **Sparkline Buckets** — In parallel, tokens are summed into fixed-width time buckets (`sparklineBarMs`), each divided by its own width. The `sparkline` display mode draws these buckets as block glyphs, oldest first.
+6. **Sparkline Buckets** — In parallel, tokens are summed into fixed-width time buckets (`sparklineBarMs`), each divided by its own width once the bucket closes. The `sparkline` display mode draws closed buckets as block glyphs, oldest first, scaled against a held peak that relaxes over time rather than against the tallest bar currently in view.
 7. **Agent End** — The authoritative token count (if available) is used to snap the total, ensuring the final average is exact. Streaming is stopped.
 
 ## Dependencies

@@ -20,42 +20,86 @@ export interface SparklineCell {
   readonly char: string;
 }
 
+/** Rates a vertical scale can be chosen from. */
+export interface CeilingSource {
+  /** Rates of the bars about to be drawn. */
+  readonly rates: readonly number[];
+  /** Held peak from `PeakCeiling`, used by `peak` scaling. */
+  readonly sticky: number;
+  /** `thresholds.blazing`, used by `absolute` scaling. */
+  readonly blazing: number;
+}
+
 /** Options controlling how rates map to glyphs. */
 export interface SparklineRenderOptions {
-  /** Vertical scaling mode. */
-  readonly scale: SparklineScale;
-  /** Full-height reference for `absolute` scale (the blazing threshold). */
+  /** Rate that maps to the tallest block. */
   readonly ceiling: number;
   /** How to draw bars with no tokens. */
   readonly gap: SparklineGap;
 }
 
 /**
+ * Chooses the rate that maps to full height.
+ *
+ * Each mode falls back to the tallest bar in view when its reference is not
+ * usable — an unset blazing threshold or a peak that has not seen any tokens
+ * yet would otherwise divide by zero and flatten the graph to empty slots.
+ *
+ * @param scale Vertical scaling mode.
+ * @param source Rates available to scale against.
+ * @returns The ceiling to quantize bars against.
+ */
+export function resolveCeiling(
+  scale: SparklineScale,
+  source: CeilingSource,
+): number {
+  const observed = source.rates.reduce((max, rate) => Math.max(max, rate), 0);
+
+  let preferred: number;
+  switch (scale) {
+    case "absolute":
+      preferred = source.blazing;
+      break;
+    case "peak":
+      preferred = source.sticky;
+      break;
+    case "relative":
+    default:
+      preferred = observed;
+  }
+
+  return preferred > 0 ? preferred : observed;
+}
+
+/**
  * Maps token rates to sparkline glyphs.
  *
- * Rates are normalized against a ceiling — the tallest bar in view for
- * `relative` scale, the blazing threshold for `absolute` — then quantized to
- * the eight block glyphs. Values above the ceiling clamp to the tallest block.
+ * Rates are quantized against `ceiling` into the eight block glyphs by the
+ * band they fall in, so a bar never rounds up to a height it did not reach.
+ * Rates above the ceiling clamp to the tallest block, which is what keeps
+ * `absolute` and `peak` scaling stable through a burst. Any positive rate too
+ * small to register still draws the shortest block, so a trickle is visible.
  *
  * @param rates Averaged tokens per second per bar, oldest first.
- * @param opts Scaling and gap options.
+ * @param opts Resolved ceiling and gap style.
  * @returns One cell per rate, oldest first.
  */
 export function renderCells(
   rates: readonly number[],
   opts: SparklineRenderOptions,
 ): SparklineCell[] {
-  const peak = rates.reduce((max, rate) => Math.max(max, rate), 0);
-  const ceiling =
-    opts.scale === "absolute" && opts.ceiling > 0 ? opts.ceiling : peak;
   const top = SPARKLINE_BLOCKS.length - 1;
 
   return rates.map((tps) => {
     if (tps <= 0) {
       return { tps, char: opts.gap === "blank" ? " " : SPARKLINE_BLOCKS[0] };
     }
+
     const level =
-      ceiling <= 0 ? 0 : Math.min(top, Math.round((tps / ceiling) * top));
+      opts.ceiling > 0
+        ? Math.min(top, Math.floor((tps / opts.ceiling) * top))
+        : 0;
+
     return { tps, char: SPARKLINE_BLOCKS[level] };
   });
 }

@@ -48,7 +48,7 @@ const settingsState = vi.hoisted(() => {
     sparklineBars: 20,
     sparklineBarMs: 500,
     sparklineColorMode: "tier" as const,
-    sparklineScale: "relative" as const,
+    sparklineScale: "peak" as const,
     sparklineGap: "low" as const,
     providerOverrides: {},
   });
@@ -166,7 +166,7 @@ describe("SettingsMenu", () => {
       expect(typeof colorsItem?.submenu).toBe("function");
     });
 
-    it("includes the sparkline settings with labels and choices", () => {
+    it("shows a single sparkline row that opens a submenu", () => {
       const tui = makeTui();
       const items = (menu as any).buildSettingsItems(
         settings.getConfig(),
@@ -177,7 +177,37 @@ describe("SettingsMenu", () => {
         items.map((item: SettingItem) => [item.id, item]),
       );
 
-      expect(byId.sparklineBars.label).toBe("Sparkline length");
+      expect(byId.sparkline.label).toBe("Sparkline");
+      expect(byId.sparkline.currentValue).toBe("20 × 500 ms");
+      expect(typeof byId.sparkline.submenu).toBe("function");
+
+      // Sub-settings are edited in the submenu, not as top-level rows.
+      expect(
+        items
+          .map((item: SettingItem) => item.id)
+          .filter((id: string) => id.startsWith("sparkline")),
+      ).toEqual(["sparkline"]);
+    });
+  });
+
+  // ── sparkline submenu ────────────────────────────────────────────────
+
+  describe("sparkline submenu", () => {
+    it("builds submenu items with labels and choices", () => {
+      const submenuItems: SettingItem[] = (
+        menu as any
+      ).buildSparklineSubmenuItems();
+      const byId: Record<string, SettingItem> = Object.fromEntries(
+        submenuItems.map((item) => [item.id, item]),
+      );
+
+      expect(submenuItems.map((item) => item.label)).toEqual([
+        "Length",
+        "Bar width",
+        "Coloring",
+        "Vertical scale",
+        "Gaps",
+      ]);
       expect(byId.sparklineBars.currentValue).toBe("20");
       expect(byId.sparklineBarMs.currentValue).toBe("500 ms");
       expect(byId.sparklineBarMs.values).toEqual([
@@ -195,6 +225,46 @@ describe("SettingsMenu", () => {
         "Absolute (blazing = full)",
       ]);
       expect(byId.sparklineGap.values).toEqual(["Low block", "Blank"]);
+    });
+
+    it("commits a change made in the submenu", async () => {
+      await (menu as any).handleSettingChange("sparklineBarMs", "1 s");
+      expect(settingsState.config.sparklineBarMs).toBe(1000);
+    });
+
+    it("refreshes the open submenu and the group row summary", async () => {
+      const tui = makeTui();
+      (menu as any).settingsList = (menu as any).createMainSettingsList(
+        [{ id: "sparkline", label: "Sparkline", currentValue: "20 × 500 ms" }],
+        1,
+        () => {},
+        () => {},
+        () => {},
+        tui,
+      );
+      (menu as any).createSubmenuList(
+        (menu as any).buildSparklineSubmenuItems(),
+        8,
+        (id: string, value: string) =>
+          (menu as any).handleSettingChange(id, value),
+        () => {},
+        () => {},
+        tui,
+      );
+
+      await (menu as any).handleSettingChange("sparklineBars", "30");
+
+      expect(settingsState.config.sparklineBars).toBe(30);
+      expect(
+        (menu as any).sparklineSubmenuItems.find(
+          (i: SettingItem) => i.id === "sparklineBars",
+        ).currentValue,
+      ).toBe("30");
+      expect(
+        (menu as any).settingsList.items.find(
+          (i: SettingItem) => i.id === "sparkline",
+        ).currentValue,
+      ).toBe("30 × 500 ms");
     });
   });
 
@@ -755,6 +825,17 @@ describe("SettingsMenu", () => {
     it("resets the colors group", async () => {
       await (menu as any).resetGroup("colors");
       expect(settings.resetKeys).toHaveBeenCalledWith(["colors"]);
+    });
+
+    it("resets every sparkline setting through its group row", async () => {
+      await (menu as any).resetGroup("sparkline");
+      expect(settings.resetKeys).toHaveBeenCalledWith([
+        "sparklineBars",
+        "sparklineBarMs",
+        "sparklineColorMode",
+        "sparklineScale",
+        "sparklineGap",
+      ]);
     });
 
     it("does nothing for unknown group", async () => {

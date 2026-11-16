@@ -175,7 +175,7 @@ A small interactive menu is available when running `/tps` in the editor, where y
 - **Colors** — customize the hex color for each TPS tier (see [Color Customization](#color-customization))
 - **Display colors** — customize the hex color for the suffix parts (count, elapsed, ttft) (see [Display Color Customization](#display-color-customization))
 - **Suffix theming** — choose how uncolored suffix parts are styled (empty, dim, or muted) (see [Suffix Theming](#suffix-theming))
-- **Sparkline** — length, bar width, coloring, scale and gap style for the history graph (see [Sparkline History](#sparkline-history))
+- **Sparkline** — a submenu holding the history graph's length, bar width, coloring, vertical scale and gap style (see [Sparkline History](#sparkline-history))
 
 Per-provider overrides are managed separately via `/tps overrides` (see [Provider Overrides](#provider-overrides)).
 

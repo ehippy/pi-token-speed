@@ -19,6 +19,11 @@ import {
   SETTINGS_ITEMS,
   TIER_SETTINGS_ITEMS,
 } from "../defaults";
+import {
+  formatSparklineBarMs,
+  SPARKLINE_GROUP_ID,
+  SPARKLINE_IDS,
+} from "../items/sparkline";
 import { TIERS } from "../options";
 import { AbstractSettingsMenu } from "./abstract-settings-menu";
 import { SettingsListRefresher } from "./settings-list-refresher";
@@ -149,16 +154,21 @@ export class SettingsMenu extends AbstractSettingsMenu {
   }
 
   /**
-   * Resets a grouped setting (thresholds or colors) by deleting the
-   * group key from the persisted config (so all tiers fall back to
-   * their defaults).
+   * Resets a grouped setting by deleting the group key from the persisted
+   * config (so all sub-settings fall back to their defaults).
    *
-   * @param id The group identifier ("thresholds" or "colors").
+   * The sparkline group has no nested config object — its settings are flat
+   * keys — so resetting it deletes each of those keys instead.
+   *
+   * @param id The group identifier ("thresholds", "colors", "displayColors"
+   *   or "sparkline").
    */
   protected override async resetGroup(id: string): Promise<void> {
     const item = SETTINGS_ITEMS[id];
     if (!item) return;
-    await this.settings.resetKeys([id]);
+    await this.settings.resetKeys(
+      id === SPARKLINE_GROUP_ID ? [...SPARKLINE_IDS] : [id],
+    );
   }
 
   /**
@@ -186,6 +196,8 @@ export class SettingsMenu extends AbstractSettingsMenu {
   ): SettingItem[] {
     const items: SettingItem[] = [];
     for (const [id, setting] of Object.entries(SETTINGS_ITEMS)) {
+      // Sparkline sub-settings get their own submenu (below) instead of rows.
+      if (SPARKLINE_IDS.includes(id)) continue;
       const currentValue = setting.format(config);
       if (currentValue === undefined) continue;
       items.push({
@@ -197,7 +209,26 @@ export class SettingsMenu extends AbstractSettingsMenu {
       });
     }
 
-    // Group items — Thresholds and Colors
+    // Group items — Sparkline, Thresholds, Colors, Display Colors
+    const sparklineItem = SETTINGS_ITEMS[SPARKLINE_GROUP_ID];
+    if (sparklineItem) {
+      items.push({
+        id: SPARKLINE_GROUP_ID,
+        label: sparklineItem.label,
+        description: sparklineItem.description,
+        currentValue: formatSparklineSummary(config),
+        submenu: (_currentValue: string, done) =>
+          this.createSubmenuList(
+            this.buildSparklineSubmenuItems(),
+            8,
+            (id, newValue) => this.handleSettingChange(id, newValue),
+            () => done(undefined),
+            (id) => this.resetSetting(id),
+            tui,
+          ),
+      });
+    }
+
     const thresholdsItem = SETTINGS_ITEMS["thresholds"];
     if (thresholdsItem) {
       const thresholdsDisplay = Object.values(config.thresholds).join(" | ");
@@ -285,6 +316,58 @@ export class SettingsMenu extends AbstractSettingsMenu {
   }
 
   /**
+   * Builds submenu items for the sparkline settings, which are stored as
+   * flat config keys rather than a nested group.
+   *
+   * @returns Array of SettingItem for the sparkline submenu.
+   */
+  private buildSparklineSubmenuItems(): SettingItem[] {
+    const config = this.settings.getConfig();
+    return SPARKLINE_IDS.map((id) => {
+      const item = SETTINGS_ITEMS[id];
+      return {
+        id,
+        label: item.label,
+        description: item.description,
+        currentValue: item.format(config) ?? "",
+        ...(item.values ? { values: item.values } : {}),
+      };
+    });
+  }
+
+  /**
+   * Refreshes the sparkline group row, the stored submenu items, and the
+   * active submenu (if sparkline is open).
+   */
+  override refreshSparklineItems(): void {
+    const config = this.settings.getConfig();
+
+    if (this.settingsList) {
+      this.settingsList.updateValue(
+        SPARKLINE_GROUP_ID,
+        formatSparklineSummary(config),
+      );
+      this.settingsList.invalidate();
+    }
+
+    if (this.sparklineSubmenuItems) {
+      for (const item of this.sparklineSubmenuItems) {
+        item.currentValue = formatSparklineValue(item.id, config);
+      }
+    }
+
+    if (this.activeSubmenuList) {
+      for (const id of SPARKLINE_IDS) {
+        this.activeSubmenuList.updateValue(
+          id,
+          formatSparklineValue(id, config),
+        );
+      }
+      this.activeSubmenuList.invalidate();
+    }
+  }
+
+  /**
    * Refreshes threshold values across the main list, threshold submenu,
    * and active submenu (if thresholds is open).
    */
@@ -340,4 +423,25 @@ export class SettingsMenu extends AbstractSettingsMenu {
 
     this.refresher.refreshDisplayColors();
   }
+}
+
+/**
+ * Formats one sparkline setting for display.
+ *
+ * @param id Flat sparkline config key.
+ * @param config Current configuration.
+ * @returns The formatted value, or an empty string if the id is unknown.
+ */
+function formatSparklineValue(id: string, config: TokenSpeedConfig): string {
+  return SETTINGS_ITEMS[id]?.format(config) ?? "";
+}
+
+/**
+ * Summarizes the graph geometry for the group row, e.g. `20 × 500 ms`.
+ *
+ * @param config Current configuration.
+ * @returns Summary of bar count and bar width.
+ */
+function formatSparklineSummary(config: TokenSpeedConfig): string {
+  return `${config.sparklineBars} × ${formatSparklineBarMs(config.sparklineBarMs)}`;
 }

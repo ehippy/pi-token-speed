@@ -6,10 +6,23 @@ import type {
   SettingsList,
   TUI,
 } from "@earendil-works/pi-tui";
+import { SPARKLINE_IDS } from "../items/sparkline";
 import {
   ResettableSettingsList,
   type SettingsListActions,
 } from "../../ui/resettable-settings-list";
+
+/** How one submenu recognizes its item ids and where it stores them. */
+interface SubmenuKey {
+  /** Id prefix of nested sub-items, e.g. `colors.` */
+  prefix: string;
+  /** Id of the group row in the main list. */
+  groupId: string;
+  /** Property holding the open submenu's items. */
+  itemProp: string;
+  /** Member ids, for groups whose settings are stored as flat keys. */
+  members?: readonly string[];
+}
 
 /**
  * Abstract base for settings menus.
@@ -23,17 +36,34 @@ export abstract class AbstractSettingsMenu {
   colorSubmenuItems: SettingItem[] | null = null;
   thresholdSubmenuItems: SettingItem[] | null = null;
   displayColorSubmenuItems: SettingItem[] | null = null;
+  sparklineSubmenuItems: SettingItem[] | null = null;
   /** The main settings list (set after `create()` is called). */
   settingsList: SettingsList | null = null;
 
-  /** Maps submenu prefixes to their item property names. */
-  private readonly submenuKeys: Array<{
-    prefix: string;
-    itemProp: string;
-  }> = [
-    { prefix: "thresholds.", itemProp: "thresholdSubmenuItems" },
-    { prefix: "displayColors.", itemProp: "displayColorSubmenuItems" },
-    { prefix: "colors.", itemProp: "colorSubmenuItems" },
+  /**
+   * Maps item ids to the submenu that edits them.
+   *
+   * Nested groups match by id prefix (`colors.slow`); groups whose settings are
+   * stored as flat config keys list their member ids instead.
+   */
+  private readonly submenuKeys: SubmenuKey[] = [
+    {
+      prefix: "thresholds.",
+      groupId: "thresholds",
+      itemProp: "thresholdSubmenuItems",
+    },
+    {
+      prefix: "displayColors.",
+      groupId: "displayColors",
+      itemProp: "displayColorSubmenuItems",
+    },
+    { prefix: "colors.", groupId: "colors", itemProp: "colorSubmenuItems" },
+    {
+      prefix: "sparkline",
+      groupId: "sparkline",
+      itemProp: "sparklineSubmenuItems",
+      members: SPARKLINE_IDS,
+    },
   ];
 
   /** Dispatches group-level id strings to their refresh methods. */
@@ -41,18 +71,21 @@ export abstract class AbstractSettingsMenu {
     thresholds: () => this.refreshThresholdItems(),
     colors: () => this.refreshColorItems(),
     displayColors: () => this.refreshDisplayColorItems(),
+    sparkline: () => this.refreshSparklineItems(),
   };
 
   /**
-   * Finds the submenu key entry matching an item id prefix.
+   * Finds the submenu entry that edits an item id.
    *
    * @param id The item id to match.
    * @returns The matching submenu key, or null if none matches.
    */
-  private findSubmenuKey(
-    id: string,
-  ): { prefix: string; itemProp: string } | null {
-    return this.submenuKeys.find((k) => id.startsWith(k.prefix)) ?? null;
+  private findSubmenuKey(id: string): SubmenuKey | null {
+    return (
+      this.submenuKeys.find(
+        (k) => id.startsWith(k.prefix) || k.members?.includes(id),
+      ) ?? null
+    );
   }
 
   /**
@@ -137,7 +170,7 @@ export abstract class AbstractSettingsMenu {
    * @param id The setting identifier that changed.
    */
   protected refreshListAfterChange(id: string): void {
-    const group = id.includes(".") ? id.split(".")[0] : id;
+    const group = this.findSubmenuKey(id)?.groupId ?? id;
     this.refreshHandlers[group]?.();
   }
 
@@ -177,7 +210,7 @@ export abstract class AbstractSettingsMenu {
    * @param id The setting identifier.
    */
   protected async resetSetting(id: string): Promise<void> {
-    const isGroup = this.submenuKeys.some((k) => id === k.prefix.slice(0, -1));
+    const isGroup = this.submenuKeys.some((k) => k.groupId === id);
     if (isGroup) {
       await this.resetGroup(id);
     } else {
@@ -252,6 +285,14 @@ export abstract class AbstractSettingsMenu {
    * and active submenu (if displayColors is open).
    */
   protected refreshDisplayColorItems(): void {
+    // Subclasses override this to update their settingsList
+  }
+
+  /**
+   * Refreshes sparkline values across the main list and the active submenu
+   * (if sparkline is open).
+   */
+  protected refreshSparklineItems(): void {
     // Subclasses override this to update their settingsList
   }
 

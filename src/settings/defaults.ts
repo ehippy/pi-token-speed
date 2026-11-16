@@ -11,7 +11,10 @@ import { IconSettingsItem } from "./items/icon";
 import { SuffixThemeSettingsItem } from "./items/suffix-theme";
 import { PrefixSettingsItem } from "./items/prefix";
 import { SlidingWindowSettingsItem } from "./items/sliding-window";
-import { SPARKLINE_SETTINGS_ITEMS } from "./items/sparkline";
+import {
+  SPARKLINE_SETTINGS_ITEMS,
+  SparklineGroupSettingsItem,
+} from "./items/sparkline";
 import { THRESHOLD_ITEMS } from "./items/thresholds";
 import { ThresholdsGroupSettingsItem } from "./items/thresholds/group";
 import { UpdateIntervalSettingsItem } from "./items/update-interval";
@@ -31,6 +34,10 @@ export const SETTINGS_ITEMS: Record<string, SettingsItem> = {
   endTpsBehavior: new EndTpsBehaviorSettingsItem(),
   formatDuration: new FormatDurationSettingsItem(),
   suffixTheme: new SuffixThemeSettingsItem(),
+  sparkline: new SparklineGroupSettingsItem(),
+  // The sparkline sub-settings are ordinary scalars, so they stay registered
+  // here where defaults, validation and provider overrides apply to them. The
+  // menu shows only the group row above, which edits these in a submenu.
   ...Object.fromEntries(
     SPARKLINE_SETTINGS_ITEMS.map((item) => [item.id, item]),
   ),

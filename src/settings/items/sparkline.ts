@@ -1,3 +1,5 @@
+import type { TokenSpeedConfig } from "../../config/types";
+import { SettingsItem, ValidationResult } from "../base";
 import { ScalarSettingsItem } from "./scalar";
 
 /**
@@ -71,13 +73,23 @@ const SPARKLINE_BAR_MS_LABELS: Record<number, string> = {
 };
 
 /**
+ * Formats a bar width for display, using the menu label when there is one.
+ *
+ * @param barMs Bar width in milliseconds.
+ * @returns A human width such as `500 ms` or `1 s`.
+ */
+export function formatSparklineBarMs(barMs: number): string {
+  return SPARKLINE_BAR_MS_LABELS[barMs] ?? `${barMs} ms`;
+}
+
+/**
  * Enum setting: how sparkline bars are colored.
  */
 export class SparklineColorModeSettingsItem extends ScalarSettingsItem<SparklineColorMode> {
   constructor() {
     super({
       id: "sparklineColorMode",
-      label: "Sparkline coloring",
+      label: "Coloring",
       description:
         "Color every bar by its TPS tier, highlight only the newest bar, or keep it monochrome",
       default: SPARKLINE_COLOR_MODE_DEFAULT,
@@ -93,9 +105,9 @@ export class SparklineScaleSettingsItem extends ScalarSettingsItem<SparklineScal
   constructor() {
     super({
       id: "sparklineScale",
-      label: "Sparkline scale",
+      label: "Vertical scale",
       description:
-        "Scale bars against the peak in view, a held peak that relaxes, or the blazing threshold",
+        "Full height means the tallest bar in view, a held peak that relaxes toward it, or the blazing TPS threshold",
       default: SPARKLINE_SCALE_DEFAULT,
       labels: SPARKLINE_SCALE_LABELS,
     });
@@ -109,7 +121,7 @@ export class SparklineGapSettingsItem extends ScalarSettingsItem<SparklineGap> {
   constructor() {
     super({
       id: "sparklineGap",
-      label: "Sparkline gaps",
+      label: "Gaps",
       description: "Draw bars with no tokens as a low block or as blank space",
       default: SPARKLINE_GAP_DEFAULT,
       labels: SPARKLINE_GAP_LABELS,
@@ -125,7 +137,7 @@ export class SparklineBarsSettingsItem extends ScalarSettingsItem<number> {
   constructor() {
     super({
       id: "sparklineBars",
-      label: "Sparkline length",
+      label: "Length",
       description: "Number of bars in the graph",
       default: SPARKLINE_BARS_DEFAULT,
       min: 3,
@@ -143,7 +155,7 @@ export class SparklineBarMsSettingsItem extends ScalarSettingsItem<number> {
   constructor() {
     super({
       id: "sparklineBarMs",
-      label: "Sparkline bar width",
+      label: "Bar width",
       description:
         "Time each bar covers and averages over — wider bars smooth more",
       default: SPARKLINE_BAR_MS_DEFAULT,
@@ -156,6 +168,10 @@ export class SparklineBarMsSettingsItem extends ScalarSettingsItem<number> {
 
 /**
  * Sparkline settings in menu order.
+ *
+ * The keys are flat (`sparklineBars`, …) rather than a nested object: each one
+ * is an ordinary scalar setting, and `SparklineGroupSettingsItem` groups them
+ * into a submenu.
  */
 export const SPARKLINE_SETTINGS_ITEMS: ScalarSettingsItem<unknown>[] = [
   new SparklineBarsSettingsItem(),
@@ -164,3 +180,40 @@ export const SPARKLINE_SETTINGS_ITEMS: ScalarSettingsItem<unknown>[] = [
   new SparklineScaleSettingsItem(),
   new SparklineGapSettingsItem(),
 ];
+
+/**
+ * Id of the sparkline submenu row.
+ */
+export const SPARKLINE_GROUP_ID = "sparkline";
+
+/**
+ * Flat config keys edited by the sparkline submenu.
+ */
+export const SPARKLINE_IDS: readonly string[] = SPARKLINE_SETTINGS_ITEMS.map(
+  (i) => i.id,
+);
+
+/**
+ * Group row that opens the sparkline submenu.
+ *
+ * It has no value of its own (`format()` is undefined, which is how the
+ * settings menu recognizes group rows) and no config field of its own; the
+ * individual settings are edited in the submenu.
+ */
+export class SparklineGroupSettingsItem extends SettingsItem {
+  readonly id = SPARKLINE_GROUP_ID;
+  readonly label = "Sparkline";
+  readonly description =
+    "History graph of recent token throughput — one bar per time slice";
+
+  format(_config: TokenSpeedConfig): string | undefined {
+    return undefined;
+  }
+
+  setConfig(_config: TokenSpeedConfig, _value: string): ValidationResult {
+    return {
+      valid: false,
+      errors: ["Sparkline is a group — edit a setting inside its submenu"],
+    };
+  }
+}

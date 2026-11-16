@@ -1,8 +1,13 @@
-/** Group prefixes that have nested tier/color sub-items. */
+/**
+ * Setting ids that are groups edited through a submenu rather than a single
+ * value. `thresholds`, `colors` and `displayColors` nest their sub-items
+ * (`colors.slow`); `sparkline` groups flat keys (`sparklineBars`).
+ */
 export const GROUP_PREFIXES = [
   "thresholds",
   "colors",
   "displayColors",
+  "sparkline",
 ] as const;
 
 /**

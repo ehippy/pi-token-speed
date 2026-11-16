@@ -7,6 +7,7 @@ import type {
   TokenSpeedConfig,
 } from "../../config/types";
 import { SETTINGS_ITEMS } from "../defaults";
+import { isScalarField } from "../utils";
 import { COLOR_ITEMS } from "./colors";
 import { DISPLAY_COLOR_ITEMS } from "./display-colors";
 import { THRESHOLD_ITEMS } from "./thresholds";
@@ -55,19 +56,14 @@ export class OverrideValidator {
     return { config: cleaned, errors };
   }
 
-  /** Scalar keys: delegate to each SettingItem's validate() (skip composites). */
+  /** Scalar keys: delegate to each SettingItem's validate() (skip groups). */
   private validateScalars(
     cleaned: ProviderOverride,
     _errors: string[],
     drop: (key: string, detail: string) => void,
   ): void {
     for (const item of Object.values(SETTINGS_ITEMS)) {
-      if (
-        item.id in cleaned &&
-        item.id !== "thresholds" &&
-        item.id !== "colors" &&
-        item.id !== "displayColors"
-      ) {
+      if (item.id in cleaned && isScalarField(item.id)) {
         const result = item.validate(
           cleaned[item.id as keyof ProviderOverride],
         );

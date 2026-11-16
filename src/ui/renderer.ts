@@ -11,6 +11,8 @@ import type {
 } from "../config/types";
 import { TokenSpeedEngine } from "../core/engine";
 import { type DisplayMode } from "../settings/items/display";
+import { type TokenBar } from "../sparkline/bars";
+import { renderCells } from "../sparkline/render";
 import { truecolor } from "./ansi";
 
 /**
@@ -25,6 +27,18 @@ interface StatsFormatOptions {
   theme: Theme;
   /** Theme key for uncolored parts (any string; empty = plain text). */
   suffixTheme: string;
+}
+
+/**
+ * Engine values a suffix renderer may show, plus the resolved config.
+ */
+interface SuffixContext {
+  ttft: number;
+  tokens: number;
+  elapsed: number;
+  /** TPS history for the sparkline mode. */
+  bars: readonly TokenBar[];
+  config: TokenSpeedConfig;
 }
 
 /**
@@ -82,7 +96,7 @@ export class Renderer {
     const displayValue = truecolor(measurement, color);
 
     // Build the suffix based on display mode
-    const suffix = this.buildSuffix(config.display, {
+    const suffix = this.buildSuffix(config, {
       formatDuration: config.formatDuration,
       displayColors: config.displayColors,
       theme,
@@ -193,15 +207,10 @@ export class Renderer {
 
   private readonly RENDER_SUFFIXES: Record<
     DisplayMode,
-    (
-      ttft: number,
-      tokens: number,
-      elapsed: number,
-      opts: StatsFormatOptions,
-    ) => string
+    (ctx: SuffixContext, opts: StatsFormatOptions) => string
   > = {
     tps: () => "\u200b",
-    ttft: (ttft, _, __, opts) => {
+    ttft: ({ ttft }, opts) => {
       const open = this.colorOrTheme("(", "", opts);
       const label = this.colorOrTheme("TTFT: ", "", opts);
       const val = this.colorOrTheme(
@@ -212,12 +221,14 @@ export class Renderer {
       const close = this.colorOrTheme(")", "", opts);
       return ` ${open}${label}${val}${close}\u200b`;
     },
-    stats: (_, tokens, elapsed, opts) => {
+    stats: ({ tokens, elapsed }, opts) => {
       const open = this.colorOrTheme("(", "", opts);
       const close = this.colorOrTheme(")", "", opts);
       return ` ${open}${this.formatStats(tokens, elapsed, opts)}${close}\u200b`;
     },
-    full: (ttft, tokens, elapsed, opts) => {
+    sparkline: ({ bars, config }, opts) =>
+      ` ${this.renderSparkline(bars, config, opts)}\u200b`,
+    full: ({ ttft, tokens, elapsed }, opts) => {
       const open = this.colorOrTheme("(", "", opts);
       const stats = this.formatStats(tokens, elapsed, opts);
       const sep = this.colorOrTheme(" · ", "", opts);
@@ -235,13 +246,73 @@ export class Renderer {
   /**
    * Builds a suffix for the status bar after the TPS measurement.
    *
-   * @param display Display mode to check against
-   * @param opts Formatting options for the stats portion (includes theme).
+   * @param config The resolved config for the active provider.
+   * @param opts Formatting options for the suffix parts (includes theme).
    * @returns The suffix to append
    */
-  private buildSuffix(display: DisplayMode, opts: StatsFormatOptions): string {
-    const { ttft, tokenCount: tokens, elapsedSeconds: elapsed } = this.engine;
-    return this.RENDER_SUFFIXES[display](ttft, tokens, elapsed, opts);
+  private buildSuffix(
+    config: TokenSpeedConfig,
+    opts: StatsFormatOptions,
+  ): string {
+    const engine = this.engine;
+    const { ttft, tokenCount: tokens, elapsedSeconds: elapsed } = engine;
+    return this.RENDER_SUFFIXES[config.display](
+      {
+        ttft,
+        tokens,
+        elapsed,
+        config,
+        // Read lazily: only the sparkline mode pays for building the series
+        get bars() {
+          return engine.sparklineSeries;
+        },
+      },
+      opts,
+    );
+  }
+
+  /**
+   * Renders the TPS history as block glyphs, one per fixed-width time bar.
+   *
+   * @param bars Fixed-width bars from the engine, oldest first.
+   * @param config The resolved config (scale, gap, tier colors, bar count).
+   * @param opts Formatting options for uncolored bars.
+   * @returns The sparkline string, oldest bar first.
+   */
+  private renderSparkline(
+    bars: readonly TokenBar[],
+    config: TokenSpeedConfig,
+    opts: StatsFormatOptions,
+  ): string {
+    const cells = renderCells(
+      bars.map(({ tps }) => tps),
+      {
+        scale: config.sparklineScale,
+        ceiling: config.thresholds.blazing,
+        gap: config.sparklineGap,
+      },
+    );
+    const last = cells.length - 1;
+
+    return cells
+      .map((cell, index) => {
+        if (config.sparklineColorMode === "mono") {
+          return this.colorOrTheme(cell.char, "", opts);
+        }
+        if (
+          config.sparklineColorMode === "head" &&
+          index !== last &&
+          cell.tps > 0
+        ) {
+          return opts.theme.fg("dim", cell.char);
+        }
+        return this.colorOrTheme(
+          cell.char,
+          this.getColor(config, cell.tps),
+          opts,
+        );
+      })
+      .join("");
   }
 
   /**

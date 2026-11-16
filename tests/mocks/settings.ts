@@ -25,6 +25,11 @@ export const defaultConfig: TokenSpeedConfig = {
     blazing: "#00ccff",
   },
   displayColors: { count: "", elapsed: "", ttft: "" },
+  sparklineBars: 20,
+  sparklineBarMs: 500,
+  sparklineColorMode: "tier",
+  sparklineScale: "relative",
+  sparklineGap: "low",
   providerOverrides: {},
 };
 

@@ -11,6 +11,7 @@ A [Pi Coding Agent](https://pi.dev/) extension that displays real-time **tokens-
 - **Configurable update interval** — throttle status bar updates to reduce visual flickering
 - **Provider-reported counting** — opt in to using provider-reported counts (e.g. Anthropic, OpenAI) instead of the extension's own counter
 - **Per-provider overrides** — different thresholds, display mode, etc. per provider (e.g. `anthropic` vs `openai`)
+- **TPS sparkline** — a short block graph (`▁▂▅█`) of recent token speed, with configurable length, bar width, coloring and scale
 - **Fully configurable** — customize display, thresholds and colors via `~/.pi/agent/settings.json`
 
 ## Speed Tiers
@@ -64,7 +65,12 @@ You can customize the display, speed thresholds and colors by adding a `tokenSpe
     "slidingWindow": 1000,
     "updateInterval": 0,
     "formatDuration": false,
-    "suffixTheme": ""
+    "suffixTheme": "",
+    "sparklineBars": 20,
+    "sparklineBarMs": 500,
+    "sparklineColorMode": "tier",
+    "sparklineScale": "relative",
+    "sparklineGap": "low"
   }
 }
 ```
@@ -114,7 +120,7 @@ Keys are matched against the model's provider id (e.g. `anthropic`, `openai`, `g
 Resolution timing per key group:
 
 - **Renderer-side** keys (`display`, `icon`, `thresholds`, `colors`, `updateInterval`) apply as soon as the provider changes.
-- **Engine-side** keys (`slidingWindow`, `useProviderTokens`, `countStrategy`, `endTpsBehavior`) apply at the next stream start, so the current measurement is never skewed mid-stream.
+- **Engine-side** keys (`slidingWindow`, `useProviderTokens`, `countStrategy`, `endTpsBehavior`, `sparklineBars`, `sparklineBarMs`) apply at the next stream start, so the current measurement is never skewed mid-stream.
 
 You can also manage overrides interactively with `/tps overrides` (see [Commands](#commands)).
 
@@ -124,28 +130,33 @@ Invalid configuration values are automatically corrected to their defaults. A wa
 
 ### Configuration Options
 
-| Option               | Type                           | Default     | Description                                                                                       |
-| -------------------- | ------------------------------ | ----------- | ------------------------------------------------------------------------------------------------- |
-| `thresholds.slow`    | number                         | `0`         | Minimum TPS threshold ("slow")                                                                    |
-| `thresholds.medium`  | number                         | `15`        | TPS above this is "medium"                                                                        |
-| `thresholds.fast`    | number                         | `30`        | TPS above this is "fast"                                                                          |
-| `thresholds.blazing` | number                         | `45`        | TPS above this is "blazing"                                                                       |
-| `colors.slow`        | string                         | `"#ff4444"` | Color for slow tier                                                                               |
-| `colors.medium`      | string                         | `"#ffaa00"` | Color for medium tier                                                                             |
-| `colors.fast`        | string                         | `"#00ff88"` | Color for fast tier                                                                               |
-| `colors.blazing`     | string                         | `"#44ddff"` | Color for blazing tier                                                                            |
-| `slidingWindow`      | number                         | `1000`      | Sliding window duration in ms                                                                     |
-| `display`            | `tps`, `ttft`, `stats`, `full` | `tps`       | Display mode (see [Display Modes](#display-modes))                                                |
-| `useProviderTokens`  | boolean                        | `false`     | Opt-in: use provider-reported count instead of the extension one                                  |
-| `countStrategy`      | `estimate`, `direct`           | `direct`    | Token counting strategy used by the extension's own counter                                       |
-| `endTpsBehavior`     | `average`, `last`              | `average`   | What to show after streaming ends                                                                 |
-| `icon`               | string                         | `"⚡"`      | Icon shown before the prefix label in the status bar                                              |
-| `prefix`             | string                         | `"TPS"`     | Prefix label shown before the measurement                                                         |
-| `updateInterval`     | number                         | `0`         | Status bar update interval in ms (0 = every delta)                                                |
-| `formatDuration`     | boolean                        | `false`     | Show elapsed time in human-readable units (see [Duration Formatting](#duration-formatting))       |
-| `suffixTheme`        | `""`, `"dim"`, `"muted"`       | `""`        | Style for uncolored suffix parts (empty, dim, or muted)                                           |
-| `displayColors`      | object                         | `{}`        | Hex colors for the suffix parts (see [Display Color Customization](#display-color-customization)) |
-| `providerOverrides`  | object                         | `{}`        | Per-provider config overrides (see [Provider Overrides](#provider-overrides))                     |
+| Option               | Type                                        | Default     | Description                                                                                       |
+| -------------------- | ------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `thresholds.slow`    | number                                      | `0`         | Minimum TPS threshold ("slow")                                                                    |
+| `thresholds.medium`  | number                                      | `15`        | TPS above this is "medium"                                                                        |
+| `thresholds.fast`    | number                                      | `30`        | TPS above this is "fast"                                                                          |
+| `thresholds.blazing` | number                                      | `45`        | TPS above this is "blazing"                                                                       |
+| `colors.slow`        | string                                      | `"#ff4444"` | Color for slow tier                                                                               |
+| `colors.medium`      | string                                      | `"#ffaa00"` | Color for medium tier                                                                             |
+| `colors.fast`        | string                                      | `"#00ff88"` | Color for fast tier                                                                               |
+| `colors.blazing`     | string                                      | `"#44ddff"` | Color for blazing tier                                                                            |
+| `slidingWindow`      | number                                      | `1000`      | Sliding window duration in ms                                                                     |
+| `display`            | `tps`, `ttft`, `stats`, `sparkline`, `full` | `tps`       | Display mode (see [Display Modes](#display-modes))                                                |
+| `useProviderTokens`  | boolean                                     | `false`     | Opt-in: use provider-reported count instead of the extension one                                  |
+| `countStrategy`      | `estimate`, `direct`                        | `direct`    | Token counting strategy used by the extension's own counter                                       |
+| `endTpsBehavior`     | `average`, `last`                           | `average`   | What to show after streaming ends                                                                 |
+| `icon`               | string                                      | `"⚡"`      | Icon shown before the prefix label in the status bar                                              |
+| `prefix`             | string                                      | `"TPS"`     | Prefix label shown before the measurement                                                         |
+| `updateInterval`     | number                                      | `0`         | Status bar update interval in ms (0 = every delta)                                                |
+| `formatDuration`     | boolean                                     | `false`     | Show elapsed time in human-readable units (see [Duration Formatting](#duration-formatting))       |
+| `suffixTheme`        | `""`, `"dim"`, `"muted"`                    | `""`        | Style for uncolored suffix parts (empty, dim, or muted)                                           |
+| `sparklineBars`      | number (3–60)                               | `20`        | Number of bars in the sparkline (see [Sparkline History](#sparkline-history))                     |
+| `sparklineBarMs`     | number (50–10000)                           | `500`       | Time each bar covers and averages over, in ms                                                     |
+| `sparklineColorMode` | `tier`, `head`, `mono`                      | `tier`      | How sparkline bars are colored                                                                    |
+| `sparklineScale`     | `relative`, `absolute`                      | `relative`  | Bars scaled against the peak in view, or against `thresholds.blazing`                             |
+| `sparklineGap`       | `low`, `blank`                              | `low`       | How bars with no tokens (stalls) are drawn                                                        |
+| `displayColors`      | object                                      | `{}`        | Hex colors for the suffix parts (see [Display Color Customization](#display-color-customization)) |
+| `providerOverrides`  | object                                      | `{}`        | Per-provider config overrides (see [Provider Overrides](#provider-overrides))                     |
 
 ### Interactive Menu
 
@@ -164,6 +175,7 @@ A small interactive menu is available when running `/tps` in the editor, where y
 - **Colors** — customize the hex color for each TPS tier (see [Color Customization](#color-customization))
 - **Display colors** — customize the hex color for the suffix parts (count, elapsed, ttft) (see [Display Color Customization](#display-color-customization))
 - **Suffix theming** — choose how uncolored suffix parts are styled (empty, dim, or muted) (see [Suffix Theming](#suffix-theming))
+- **Sparkline** — length, bar width, coloring, scale and gap style for the history graph (see [Sparkline History](#sparkline-history))
 
 Per-provider overrides are managed separately via `/tps overrides` (see [Provider Overrides](#provider-overrides)).
 
@@ -309,6 +321,46 @@ With `suffixTheme` set and no `displayColors`, the entire suffix follows the cho
 
 Suffix theming is independent from display colors and tier colors — they can be used together for a fully customized status bar.
 
+### Sparkline History
+
+Set `display` to `"sparkline"` to append a block graph of recent token speed after the measurement:
+
+```
+⚡ TPS: 42.1 tok/s ▁▁▁▁▁▁▁▂▃▅▇█▇▆▄▃▂▁▁▁
+```
+
+Each bar covers a **fixed slice of time** (`sparklineBarMs`, default `500` — pick `100`, `250`, `500`, `1000`, `2000` or `5000` in the menu, or any value in `settings.json`) and shows the average rate over that slice. Fixed slices are what make the graph readable: the jitter of individual deltas is averaged away inside each bar, and — unlike a rolling counter — a slot exists whether or not tokens arrived, so a provider stall shows up as a dip instead of being skipped and leaving a stale high bar on screen.
+
+Total history on screen is `sparklineBars × sparklineBarMs` (default `20 × 500ms` = the last 10 seconds). History is kept across turns in a session, so the graph starts filling as soon as the first reply streams; it is cleared when the extension reloads. Changing the bar count or width takes effect at the next session start.
+
+**Coloring** (`sparklineColorMode`):
+
+- `tier` (default) — every bar takes the color of its own TPS tier, so a slowdown reads as a color change as well as a shape change (reuses `colors.*`)
+- `head` — only the newest bar is tier-colored, history is dimmed; keeps the eye on the present
+- `mono` — no colors; bars follow `suffixTheme` (or the terminal default)
+
+**Scale** (`sparklineScale`):
+
+- `relative` (default) — the fastest bar in view is drawn full height, so the shape of a single reply is easy to read at any speed
+- `absolute` — `thresholds.blazing` is full height, so bar heights stay comparable between replies and providers (rates above the ceiling clamp to the tallest block)
+
+**Gaps** (`sparklineGap`) control how a bar with no tokens is drawn: `low` (default) uses the shortest block so a stall reads as a flat line; `blank` uses a space so it reads as a break in the graph.
+
+```json
+{
+  "tokenSpeed": {
+    "display": "sparkline",
+    "sparklineBars": 30,
+    "sparklineBarMs": 250,
+    "sparklineColorMode": "head",
+    "sparklineScale": "absolute",
+    "sparklineGap": "blank"
+  }
+}
+```
+
+The graph reflects the same token counts as the TPS number, so it inherits whatever `useProviderTokens` and `countStrategy` say about accuracy (see [Provider Token Counts](#provider-token-counts) and [Count Strategy](#count-strategy)).
+
 ### Threshold Customization
 
 The four TPS tier thresholds can be customized via the `/tps` interactive menu by selecting **Thresholds**. Each tier opens a numeric input where you can enter a non-negative integer value. Thresholds must be in strict ascending order (`slow < medium < fast < blazing`); invalid values are rejected with a warning.
@@ -367,12 +419,13 @@ When `formatDuration` is enabled, elapsed time in the stats display is formatted
 
 ## Display Modes
 
-| Mode    | Description                                                                 |
-| ------- | --------------------------------------------------------------------------- |
-| `tps`   | `⚡ TPS: 25.0 tok/s` — TPS with color-coded speed tier                      |
-| `ttft`  | `⚡ TPS: 25.0 tok/s (TTFT: 450 ms)` — TPS + time-to-first-token             |
-| `stats` | `⚡ TPS: 25.0 tok/s (150 tok in 6.0s)` — TPS + token count and elapsed time |
-| `full`  | `⚡ TPS: 25.0 tok/s (150 tok in 6.0s · TTFT: 450 ms)` — everything          |
+| Mode        | Description                                                                 |
+| ----------- | --------------------------------------------------------------------------- |
+| `tps`       | `⚡ TPS: 25.0 tok/s` — TPS with color-coded speed tier                      |
+| `ttft`      | `⚡ TPS: 25.0 tok/s (TTFT: 450 ms)` — TPS + time-to-first-token             |
+| `stats`     | `⚡ TPS: 25.0 tok/s (150 tok in 6.0s)` — TPS + token count and elapsed time |
+| `full`      | `⚡ TPS: 25.0 tok/s (150 tok in 6.0s · TTFT: 450 ms)` — everything          |
+| `sparkline` | `⚡ TPS: 25.0 tok/s ▁▂▅▆█▆▄▂` — TPS + recent speed history                  |
 
 > **Note:** Set `icon: ""` to hide the icon prefix, rendering just `TPS: 25.0 tok/s`.
 
@@ -419,7 +472,8 @@ The settings menu is described in detail in [Interactive Menu](#interactive-menu
 5. **Sliding Window** — TPS is calculated using a configurable time window of token timestamps. If all events in the window share the same timestamp (a flush after a stall), the span extends backward to include the gap. When streaming ends, behavior depends on `endTpsBehavior`:
    - `average` (default): returns the overall average TPS for consistency with stats.
    - `last`: returns the last sliding window measurement.
-6. **Agent End** — The authoritative token count (if available) is used to snap the total, ensuring the final average is exact. Streaming is stopped.
+6. **Sparkline Buckets** — In parallel, tokens are summed into fixed-width time buckets (`sparklineBarMs`), each divided by its own width. The `sparkline` display mode draws these buckets as block glyphs, oldest first.
+7. **Agent End** — The authoritative token count (if available) is used to snap the total, ensuring the final average is exact. Streaming is stopped.
 
 ## Dependencies
 

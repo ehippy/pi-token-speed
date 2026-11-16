@@ -11,6 +11,7 @@ import { IconSettingsItem } from "./items/icon";
 import { SuffixThemeSettingsItem } from "./items/suffix-theme";
 import { PrefixSettingsItem } from "./items/prefix";
 import { SlidingWindowSettingsItem } from "./items/sliding-window";
+import { SPARKLINE_SETTINGS_ITEMS } from "./items/sparkline";
 import { THRESHOLD_ITEMS } from "./items/thresholds";
 import { ThresholdsGroupSettingsItem } from "./items/thresholds/group";
 import { UpdateIntervalSettingsItem } from "./items/update-interval";
@@ -30,6 +31,9 @@ export const SETTINGS_ITEMS: Record<string, SettingsItem> = {
   endTpsBehavior: new EndTpsBehaviorSettingsItem(),
   formatDuration: new FormatDurationSettingsItem(),
   suffixTheme: new SuffixThemeSettingsItem(),
+  ...Object.fromEntries(
+    SPARKLINE_SETTINGS_ITEMS.map((item) => [item.id, item]),
+  ),
   thresholds: new ThresholdsGroupSettingsItem(),
   colors: new ColorsGroupSettingsItem(),
   displayColors: new DisplayColorsGroupSettingsItem(),

@@ -9,6 +9,7 @@ import {
 } from "../settings/items/end-tps-behavior";
 import { SLIDING_WINDOW_DEFAULT } from "../settings/items/sliding-window";
 import { USE_PROVIDER_TOKENS_DEFAULT } from "../settings/items/use-provider-tokens";
+import { TokenBars, type TokenBar } from "../sparkline/bars";
 import { SlidingWindow } from "./sliding-window";
 
 const TOKEN_REGEX = /\w+|[^\s\w]/g;
@@ -31,6 +32,7 @@ export class TokenSpeedEngine {
   private _countedUsageOutput = 0;
 
   private _slidingWindow: SlidingWindow;
+  private _bars = new TokenBars();
   private _useProviderTokens = USE_PROVIDER_TOKENS_DEFAULT;
   private _countStrategy: CountStrategy = COUNT_STRATEGY_DEFAULT;
   private _endTpsBehavior: EndTpsBehavior = END_TPS_BEHAVIOR_DEFAULT;
@@ -47,6 +49,9 @@ export class TokenSpeedEngine {
   initialize(): void {
     this._providerId = undefined;
     this.applyConfig(this.settings.getConfig());
+    // Sparkline history is session-scoped; configure() above only resets
+    // when the bar geometry changed, so clear it explicitly here.
+    this._bars.reset();
   }
 
   /**
@@ -75,6 +80,7 @@ export class TokenSpeedEngine {
    */
   private applyConfig(config: TokenSpeedConfig): void {
     this._slidingWindow = new SlidingWindow(config.slidingWindow);
+    this._bars.configure(config.sparklineBarMs, config.sparklineBars);
     this._countStrategy = config.countStrategy;
     this._useProviderTokens = config.useProviderTokens;
     this._endTpsBehavior = config.endTpsBehavior;
@@ -182,6 +188,17 @@ export class TokenSpeedEngine {
   }
 
   /**
+   * Returns the sparkline history: fixed-width time bars, oldest first.
+   *
+   * Each bar averages the tokens recorded in its own slot, so the shape
+   * absorbs per-delta fluctuation and stalls appear as empty bars. History is
+   * kept across turns and only cleared by `initialize()` or a bar-width change.
+   */
+  get sparklineSeries(): readonly TokenBar[] {
+    return this._bars.series(this.now());
+  }
+
+  /**
    * Returns time to first token in milliseconds
    */
   get ttft(): number {
@@ -257,6 +274,7 @@ export class TokenSpeedEngine {
 
     this._tokenCount += tokens;
     this._slidingWindow.record(tokens);
+    this._bars.add(tokens, this.now());
     this._tps = this._slidingWindow.getTps(this.now());
   }
 

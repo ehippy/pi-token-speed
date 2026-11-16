@@ -8,7 +8,17 @@ import { EventManager } from "../src/core/events";
 import { STATUS_KEY } from "../src/config/constants";
 import type { TokenSpeedConfig } from "../src/config/types";
 import { TokenSpeedEngine } from "../src/core/engine";
+import { truecolor } from "../src/ui/ansi";
 import { Renderer } from "../src/ui/renderer";
+
+/** Sparkline defaults, spread into the fixtures below. */
+const SPARKLINE = {
+  sparklineBars: 20,
+  sparklineBarMs: 500,
+  sparklineColorMode: "tier",
+  sparklineScale: "relative",
+  sparklineGap: "low",
+} as const;
 
 // Mutable config so tests can override settings mid-flight
 const configRef: { current: TokenSpeedConfig } = {
@@ -31,6 +41,7 @@ const configRef: { current: TokenSpeedConfig } = {
       blazing: "#00ccff",
     },
     displayColors: { count: "", elapsed: "", ttft: "" },
+    ...SPARKLINE,
     providerOverrides: {},
   },
 };
@@ -149,6 +160,7 @@ describe("Renderer", () => {
         blazing: "#00ccff",
       },
       displayColors: { count: "", elapsed: "", ttft: "" },
+      ...SPARKLINE,
       providerOverrides: {},
     };
     engine = makeEngine();
@@ -445,14 +457,20 @@ describe("Renderer", () => {
     const opts = { theme: mockTheme };
 
     it('returns a zero-width space for "tps" mode', () => {
-      const suffix = (renderer as any).buildSuffix("tps", opts);
+      const suffix = (renderer as any).buildSuffix(
+        makeConfig({ display: "tps" }),
+        opts,
+      );
       expect(suffix).toBe("\u200b");
     });
 
     it('includes TTFT for "ttft" mode', () => {
       engine["_ttftEnd"] = 500;
       engine["_ttftStart"] = 0;
-      const suffix = (renderer as any).buildSuffix("ttft", opts);
+      const suffix = (renderer as any).buildSuffix(
+        makeConfig({ display: "ttft" }),
+        opts,
+      );
       expect(suffix).toContain("(TTFT: 500 ms)");
     });
 
@@ -460,7 +478,10 @@ describe("Renderer", () => {
       engine["_tokenCount"] = 200;
       engine["_startTime"] = Date.now() - 5000;
       engine["_endTime"] = Date.now();
-      const suffix = (renderer as any).buildSuffix("stats", opts);
+      const suffix = (renderer as any).buildSuffix(
+        makeConfig({ display: "stats" }),
+        opts,
+      );
       expect(suffix).toContain("200 tok in");
       expect(suffix).toContain(".0s");
     });
@@ -471,10 +492,128 @@ describe("Renderer", () => {
       engine["_endTime"] = Date.now();
       engine["_ttftEnd"] = 300;
       engine["_ttftStart"] = 0;
-      const suffix = (renderer as any).buildSuffix("full", opts);
+      const suffix = (renderer as any).buildSuffix(
+        makeConfig({ display: "full" }),
+        opts,
+      );
       expect(suffix).toContain("200 tok in");
       expect(suffix).toContain(".0s");
       expect(suffix).toContain("TTFT: 300 ms");
+    });
+  });
+
+  // ---- renderSparkline ----
+
+  describe("renderSparkline", () => {
+    const B = [
+      "\u2581",
+      "\u2582",
+      "\u2583",
+      "\u2584",
+      "\u2585",
+      "\u2586",
+      "\u2587",
+      "\u2588",
+    ];
+    const bars = (rates: number[]) =>
+      rates.map((tps) => ({ tokens: tps, tps }));
+    const spark = (
+      overrides: Partial<TokenSpeedConfig>,
+      rates: number[],
+      theme: any = mockTheme,
+    ): string =>
+      (renderer as any).renderSparkline(bars(rates), makeConfig(overrides), {
+        theme,
+      });
+
+    it("renders one block per bar, oldest first", () => {
+      expect(spark({ sparklineColorMode: "mono" }, [0, 50, 100])).toBe(
+        `${B[0]}${B[4]}${B[7]}`,
+      );
+    });
+
+    it("colors every bar by its own tier", () => {
+      const out = spark({}, [0, 100]);
+      expect(out).toContain("\u2581"); // empty bar is below the slow tier
+      expect(out).toContain(truecolor(B[7], "#00ccff"));
+    });
+
+    it("colors only the newest bar when highlighting", () => {
+      const dimming = {
+        ...mockTheme,
+        fg: (color: string, text: string) =>
+          color === "dim" ? `<dim>${text}` : text,
+      };
+      const out = spark({ sparklineColorMode: "head" }, [50, 100], dimming);
+      expect(out).toContain(`<dim>${B[4]}`);
+      expect(out).toContain(truecolor(B[7], "#00ccff"));
+    });
+
+    it("keeps every bar uncolored in monochrome", () => {
+      expect(spark({ sparklineColorMode: "mono" }, [0, 100])).toBe(
+        `${B[0]}${B[7]}`,
+      );
+    });
+
+    it("draws stalls as blank space when configured", () => {
+      expect(
+        spark({ sparklineColorMode: "mono", sparklineGap: "blank" }, [0, 100]),
+      ).toBe(` ${B[7]}`);
+    });
+
+    it("scales against the blazing threshold in absolute mode", () => {
+      expect(
+        spark(
+          { sparklineColorMode: "mono", sparklineScale: "absolute" },
+          [50, 100],
+        ),
+      ).toBe(`${B[4]}${B[7]}`);
+      // A rate above the ceiling clamps instead of re-scaling the series
+      expect(
+        spark(
+          { sparklineColorMode: "mono", sparklineScale: "absolute" },
+          [400, 50],
+        ),
+      ).toBe(`${B[7]}${B[4]}`);
+    });
+  });
+
+  // ---- display: sparkline ----
+
+  describe("sparkline display mode", () => {
+    it("appends the history graph to the TPS measurement", () => {
+      const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
+      configRef.current = makeConfig({
+        display: "sparkline",
+        sparklineColorMode: "mono",
+      });
+      renderer = new Renderer(engine, settings as any);
+
+      engine.recordDelta("hello there");
+      engine["_tps"] = 42.5;
+      (renderer as any).render(ctx);
+
+      const text = setStatusSpy.mock.calls[0][1] as string;
+      expect(text).toContain("42.5 tok/s");
+      expect(text).toContain("\u2588"); // the bar holding the tokens
+      expect(text).toContain("\u2581"); // empty history bars
+    });
+
+    it("shows one bar per configured bar count", () => {
+      const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
+      configRef.current = makeConfig({
+        display: "sparkline",
+        sparklineColorMode: "mono",
+        sparklineBars: 6,
+      });
+      // Bar geometry is engine-side, so the engine picks it up on initialize
+      engine = makeEngine();
+      renderer = new Renderer(engine, settings as any);
+
+      (renderer as any).render(ctx);
+
+      const text = setStatusSpy.mock.calls[0][1] as string;
+      expect(text.match(/[\u2581-\u2588]/g)).toHaveLength(6);
     });
   });
 
@@ -501,6 +640,7 @@ describe("Renderer", () => {
           blazing: "#00ccff",
         },
         displayColors: { count: "", elapsed: "", ttft: "" },
+        ...SPARKLINE,
         providerOverrides: {},
       };
       renderer = new Renderer(engine, settings as any);

@@ -1,6 +1,6 @@
 import { ScalarSettingsItem } from "./scalar";
 
-export type DisplayMode = "tps" | "ttft" | "stats" | "full";
+export type DisplayMode = "tps" | "ttft" | "stats" | "full" | "sparkline";
 
 export const DISPLAY_MODE_DEFAULT: DisplayMode = "tps";
 
@@ -9,6 +9,7 @@ const DISPLAY_LABELS: Record<DisplayMode, string> = {
   ttft: "Time-to-first-token",
   stats: "Token stats",
   full: "Full details",
+  sparkline: "Sparkline history",
 };
 
 /**
@@ -21,7 +22,8 @@ export class DisplaySettingsItem extends ScalarSettingsItem<DisplayMode> {
     super({
       id: "display",
       label: "Display mode",
-      description: "Level of detail to show in the status bar",
+      description:
+        "Level of detail to show in the status bar, including a TPS history sparkline",
       default: DISPLAY_MODE_DEFAULT,
       labels: DISPLAY_LABELS,
     });

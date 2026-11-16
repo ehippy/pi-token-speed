@@ -309,4 +309,78 @@ describe("TokenSpeedEngine", () => {
       expect(resolveSpy).not.toHaveBeenCalled();
     });
   });
+
+  // ---- sparkline history ----
+
+  describe("sparkline history", () => {
+    /** Engine on a clock aligned with the default 500 ms bar width. */
+    const clocked = () => {
+      const testEngine = new TimeMockedEngine(settings, 1_000_000);
+      testEngine.initialize();
+      testEngine.start();
+      return testEngine;
+    };
+
+    it("exposes one bar per configured slot", () => {
+      const testEngine = clocked();
+      expect(testEngine.sparklineSeries).toHaveLength(
+        settings.getDefaultConfig().sparklineBars,
+      );
+      expect(testEngine.sparklineSeries.every((bar) => bar.tokens === 0)).toBe(
+        true,
+      );
+    });
+
+    it("sums tokens into the bar covering their time", () => {
+      const testEngine = clocked();
+      for (let i = 0; i < 5; i++) {
+        testEngine.recordDelta("x");
+        testEngine.tick(20);
+      }
+      // Still inside the bar that started at 1_000_000
+      expect(testEngine.sparklineSeries.at(-1)!.tokens).toBe(5);
+    });
+
+    it("leaves empty bars for stalls rather than blending them", () => {
+      const testEngine = clocked();
+      for (let i = 0; i < 5; i++) {
+        testEngine.recordDelta("x");
+        testEngine.tick(20);
+      }
+      testEngine.tick(2_000); // jump five bars ahead
+      testEngine.recordDelta("x");
+
+      const tokens = testEngine.sparklineSeries.map((bar) => bar.tokens);
+      expect(tokens.at(-1)).toBe(1);
+      expect(tokens.slice(-4, -1)).toEqual([0, 0, 0]);
+      expect(tokens.at(-5)).toBe(5);
+    });
+
+    it("keeps history across a finished stream and clears it on initialize", () => {
+      const testEngine = clocked();
+      testEngine.recordDelta("hello there");
+      testEngine.stop();
+      expect(testEngine.sparklineSeries.some((bar) => bar.tokens > 0)).toBe(
+        true,
+      );
+
+      testEngine.initialize();
+      expect(testEngine.sparklineSeries.some((bar) => bar.tokens > 0)).toBe(
+        false,
+      );
+    });
+
+    it("adopts bar geometry from a provider override", () => {
+      const testEngine = new TimeMockedEngine(settings, 1_000_000);
+      testEngine.initialize();
+      vi.spyOn(settings, "resolveConfig").mockReturnValue({
+        ...settings.getDefaultConfig(),
+        sparklineBars: 6,
+        sparklineBarMs: 250,
+      });
+
+      testEngine.applyProvider("openai"); // idle, so the override applies
+      expect(testEngine.sparklineSeries).toHaveLength(6);
+    });
+  });
 });

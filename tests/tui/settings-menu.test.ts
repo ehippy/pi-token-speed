@@ -45,6 +45,11 @@ const settingsState = vi.hoisted(() => {
       blazing: "#00ccff",
     },
     displayColors: { count: "", elapsed: "", ttft: "" },
+    sparklineBars: 20,
+    sparklineBarMs: 500,
+    sparklineColorMode: "tier" as const,
+    sparklineScale: "relative" as const,
+    sparklineGap: "low" as const,
     providerOverrides: {},
   });
   let current: ReturnType<typeof makeDefaults> = makeDefaults();
@@ -159,6 +164,36 @@ describe("SettingsMenu", () => {
       const colorsItem = items.find((i: SettingItem) => i.id === "colors");
       expect(colorsItem).toBeDefined();
       expect(typeof colorsItem?.submenu).toBe("function");
+    });
+
+    it("includes the sparkline settings with labels and choices", () => {
+      const tui = makeTui();
+      const items = (menu as any).buildSettingsItems(
+        settings.getConfig(),
+        makeTheme(),
+        tui,
+      );
+      const byId: Record<string, SettingItem> = Object.fromEntries(
+        items.map((item: SettingItem) => [item.id, item]),
+      );
+
+      expect(byId.sparklineBars.label).toBe("Sparkline length");
+      expect(byId.sparklineBars.currentValue).toBe("20");
+      expect(byId.sparklineBarMs.currentValue).toBe("500 ms");
+      expect(byId.sparklineBarMs.values).toEqual([
+        "100 ms",
+        "250 ms",
+        "500 ms",
+        "1 s",
+        "2 s",
+        "5 s",
+      ]);
+      expect(byId.sparklineColorMode.currentValue).toBe("Per-bar tiers");
+      expect(byId.sparklineScale.values).toEqual([
+        "Relative to peak",
+        "Absolute (blazing = full)",
+      ]);
+      expect(byId.sparklineGap.values).toEqual(["Low block", "Blank"]);
     });
   });
 
@@ -606,6 +641,13 @@ describe("SettingsMenu", () => {
       await (menu as any).commit("display", "TPS speed");
       expect(settings.setConfig).toHaveBeenCalledWith({
         display: "tps",
+      });
+    });
+
+    it("commits a sparkline bar width chosen by label", async () => {
+      await (menu as any).commit("sparklineBarMs", "1 s");
+      expect(settings.setConfig).toHaveBeenCalledWith({
+        sparklineBarMs: 1000,
       });
     });
 

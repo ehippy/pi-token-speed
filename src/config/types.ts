@@ -1,6 +1,11 @@
 import { type CountStrategy } from "../settings/items/count-strategy";
 import { type DisplayMode } from "../settings/items/display";
 import { type EndTpsBehavior } from "../settings/items/end-tps-behavior";
+import {
+  type SparklineColorMode,
+  type SparklineGap,
+  type SparklineScale,
+} from "../settings/items/sparkline";
 
 /**
  * Status bar suffix parts that can be colorized.
@@ -56,6 +61,11 @@ interface TokenSpeedConfigFields {
   thresholds: Thresholds;
   colors: Colors;
   displayColors: DisplayColors;
+  sparklineBars: number;
+  sparklineBarMs: number;
+  sparklineColorMode: SparklineColorMode;
+  sparklineScale: SparklineScale;
+  sparklineGap: SparklineGap;
 }
 
 /**

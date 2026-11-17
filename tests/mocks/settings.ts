@@ -5,7 +5,14 @@ import type {
   TokenSpeedConfig,
 } from "../../src/config/types";
 
-/** Default TokenSpeedConfig used by all tests. */
+/**
+ * Default TokenSpeedConfig used by all tests.
+ *
+ * `countStrategy` is pinned to `direct` here so per-delta counting stays
+ * deterministic and readable in engine assertions; the production default is
+ * `auto`, which has its own coverage in `engine.test.ts` and
+ * `token-counting.test.ts`.
+ */
 export const defaultConfig: TokenSpeedConfig = {
   display: "tps",
   slidingWindow: 5000,

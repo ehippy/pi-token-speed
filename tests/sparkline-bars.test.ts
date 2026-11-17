@@ -127,4 +127,38 @@ describe("TokenBars", () => {
       expect(bars.series(ALIGNED + 500).at(-1)!.tokens).toBe(0);
     });
   });
+
+  describe("rescaling after an authoritative correction", () => {
+    it("multiplies every retained bucket", () => {
+      const bars = new TokenBars(500, 4);
+      bars.add(10, ALIGNED);
+      bars.add(6, ALIGNED + 500);
+
+      bars.scale(3);
+
+      expect(tokensOf(bars.series(ALIGNED + 1000))).toEqual([0, 0, 30, 18]);
+    });
+
+    it("carries through to the averaged rate", () => {
+      const bars = new TokenBars(500, 4);
+      bars.add(10, ALIGNED);
+      expect(bars.series(ALIGNED + 500).at(-1)!.tps).toBe(20);
+
+      bars.scale(2.5);
+
+      expect(bars.series(ALIGNED + 500).at(-1)!.tps).toBe(50);
+    });
+
+    it("ignores a neutral or unusable factor", () => {
+      const bars = new TokenBars(500, 4);
+      bars.add(10, ALIGNED);
+
+      bars.scale(1);
+      bars.scale(0);
+      bars.scale(-3);
+      bars.scale(Number.NaN);
+
+      expect(bars.series(ALIGNED + 500).at(-1)!.tokens).toBe(10);
+    });
+  });
 });

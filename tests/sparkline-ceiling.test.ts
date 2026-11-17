@@ -94,4 +94,27 @@ describe("PeakCeiling", () => {
     ceiling.update(0, 40);
     expect(ceiling.update(SPARKLINE_HISTORY_MS_DEFAULT, 0)).toBeCloseTo(20, 6);
   });
+
+  it("rescales the held peak when the history it tracks is corrected", () => {
+    const ceiling = new PeakCeiling(1000);
+    ceiling.update(0, 40);
+
+    ceiling.scale(2);
+
+    expect(ceiling.value).toBe(80);
+    // Decay carries on from the corrected peak, on the same clock.
+    expect(ceiling.update(1000, 0)).toBeCloseTo(40, 6);
+  });
+
+  it("ignores a neutral or unusable scale factor", () => {
+    const ceiling = new PeakCeiling(1000);
+    ceiling.update(0, 40);
+
+    ceiling.scale(1);
+    ceiling.scale(0);
+    ceiling.scale(-1);
+    ceiling.scale(Number.NaN);
+
+    expect(ceiling.value).toBe(40);
+  });
 });

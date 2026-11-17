@@ -9,7 +9,8 @@ A [Pi Coding Agent](https://pi.dev/) extension that displays real-time **tokens-
 - **Configurable sliding window** — adjust the window size to suit your server speed (default: 1s)
 - **Color-coded speed indicators** — visual feedback based on performance thresholds
 - **Configurable update interval** — throttle status bar updates to reduce visual flickering
-- **Provider-reported counting** — opt in to using provider-reported counts (e.g. Anthropic, OpenAI) instead of the extension's own counter
+- **Adaptive token counting** — counts what arrived rather than how many chunks arrived, and learns each provider's tokens-per-unit ratio from its own counts, so batched and speculative-decoding servers read correctly without configuration
+- **Provider-reported counting** — opt in to using provider-reported counts (e.g. Anthropic, OpenAI) as the live reading; an authoritative count always reconciles the total at end of turn
 - **Per-provider overrides** — different thresholds, display mode, etc. per provider (e.g. `anthropic` vs `openai`)
 - **TPS sparkline** — a short block graph (`▁▂▅█`) of recent token speed, with configurable length, bar width, coloring and scale
 - **Fully configurable** — customize display, thresholds and colors via `~/.pi/agent/settings.json`
@@ -58,7 +59,7 @@ You can customize the display, speed thresholds and colors by adding a `tokenSpe
     },
     "display": "tps",
     "useProviderTokens": false,
-    "countStrategy": "direct",
+    "countStrategy": "auto",
     "endTpsBehavior": "average",
     "icon": "⚡",
     "prefix": "TPS",
@@ -92,7 +93,7 @@ Different providers stream at very different speeds and report tokens differentl
     },
     "display": "tps",
     "useProviderTokens": false,
-    "countStrategy": "direct",
+    "countStrategy": "auto",
     "displayColors": {
       "count": "#00ff88",
       "elapsed": "#ffaa00",
@@ -143,7 +144,7 @@ Invalid configuration values are automatically corrected to their defaults. A wa
 | `slidingWindow`      | number                                      | `1000`      | Sliding window duration in ms                                                                     |
 | `display`            | `tps`, `ttft`, `stats`, `sparkline`, `full` | `tps`       | Display mode (see [Display Modes](#display-modes))                                                |
 | `useProviderTokens`  | boolean                                     | `false`     | Opt-in: use provider-reported count instead of the extension one                                  |
-| `countStrategy`      | `estimate`, `direct`                        | `direct`    | Token counting strategy used by the extension's own counter                                       |
+| `countStrategy`      | `auto`, `estimate`, `direct`                | `auto`      | How output tokens are counted while streaming (see [Count Strategy](#count-strategy))             |
 | `endTpsBehavior`     | `average`, `last`                           | `average`   | What to show after streaming ends                                                                 |
 | `icon`               | string                                      | `"⚡"`      | Icon shown before the prefix label in the status bar                                              |
 | `prefix`             | string                                      | `"TPS"`     | Prefix label shown before the measurement                                                         |
@@ -181,19 +182,19 @@ Per-provider overrides are managed separately via `/tps overrides` (see [Provide
 
 ### Sliding Window
 
-The sliding window determines how many recent tokens are used to calculate TPS. A larger window produces smoother readings at the cost of responsiveness; a smaller window reacts faster but can be noisier. To avoid burst spikes, the time span used in the calculation is clamped to a minimum threshold of 100ms.
+The sliding window determines how much recent activity is used to calculate TPS. A larger window produces smoother readings at the cost of responsiveness; a smaller window reacts faster but is noisier.
 
-#### Burst & Stall Handling
+**The window is the measurement interval.** Tokens are summed over the last `slidingWindow` milliseconds and divided by that interval — not by the gap between the first and last arrival inside it. That distinction is what keeps the reading honest at both speed extremes:
 
-When a provider buffers output and flushes it all at once, all tokens arrive with the same timestamp. In this case, the TPS calculation extends the time span backward to include the gap since the last token, giving a more representative reading:
+| Situation                    | Why measuring the arrivals' own span lies                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Slow stream (1 token/s)      | One token that landed 60ms ago reads as 16 tok/s                                                         |
+| Buffered flush after a stall | 500 tokens delivered in one frame read as 5000 tok/s on a 100ms floor                                    |
+| Speculative decoding         | A server that accepts 20 tokens per step delivers them in one chunk, so the reading spikes on every step |
 
-```
-20 tokens → 5s stall → 500 tokens flushed
-```
+Those artifacts come from _when_ bytes crossed the network, not from how fast the model decoded. Measuring over the window trades them for a smoothing effect: a burst shorter than the window reads as the window's average rate. Nothing about the burst is hidden — the [sparkline](#sparkline-history) histogram keeps the per-instant shape.
 
-Without this handling, TPS would show `5000 tok/s` (500 tokens / 100ms clamp). With it, the reading reflects the actual throughput including the stall period (~100 tok/s).
-
-A legitimate burst spread over time (different timestamps) is not affected — the span uses the actual time between the first and last token in the window.
+Two floors apply at the edges: the interval never shrinks below `100ms`, so the very first flush of a fast server cannot claim a rate over a fraction of a millisecond; and it never exceeds the window, so a stream's opening tokens are never credited to time before they existed.
 
 | Server speed        | Recommended window | Why                                                       |
 | ------------------- | ------------------ | --------------------------------------------------------- |
@@ -213,27 +214,67 @@ For example, if your server streams at ~1 tok/s, a 10-second window gives ~10 to
 
 ### Provider Token Counts
 
-By default, this extension uses its own token counter — the same engine behind `countStrategy`. As an alternative, you can opt in to using the provider's own reported counts instead:
+By default this extension counts output itself — the same engine behind `countStrategy`. You can opt in to the provider's own reported counts:
 
-| Value             | Behavior                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------- |
-| `false` (default) | Use this extension's own counter (controlled by `countStrategy`)                            |
-| `true`            | Use the provider's reported counts instead; fall back to `countStrategy` when not available |
+| Value             | Behavior                                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `false` (default) | Use this extension's counter for the live reading                                               |
+| `true`            | Use the provider's reported counts as they arrive; fall back to `countStrategy` between reports |
 
-The extension's own counter is the default and always available. Enable `useProviderTokens: true` when your provider reports accurate token counts and you'd prefer to use them instead.
+Provider reports differ more than users expect:
+
+| Provider behavior                                                         | Effect with `useProviderTokens: true`                                                                          |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Cumulative usage on every chunk (some OpenAI-compatible servers)          | Exact live counts                                                                                              |
+| Usage only in the terminal chunk (LiteLLM in front of many local servers) | Nothing to use while streaming, so the reading comes from `countStrategy` and is corrected once at end of turn |
+| No usage at all                                                           | Same as `false`                                                                                                |
+
+Whichever way the live reading is produced, an authoritative count is always reconciled at end of turn (see [Reconciliation](#reconciliation)) — the total and the average are the provider's numbers.
 
 ### Count Strategy
 
-When `useProviderTokens` is `false` (default) or when the provider doesn't report counts, the `countStrategy` determines how the extension's own counter works:
+| Strategy         | Behavior                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `auto` (default) | Score each delta in proxy units from its text, scaled by a learned tokens-per-unit ratio |
+| `estimate`       | Score each delta in proxy units, without learning anything                               |
+| `direct`         | Count one token per delta, whatever the delta contains                                   |
 
-| Strategy           | Behavior                            |
-| ------------------ | ----------------------------------- |
-| `direct` (default) | Counts each delta as 1 token        |
-| `estimate`         | Approximates tokens from delta text |
+**Why `auto` is the default.** `direct` assumes one delta is one token. Servers break that assumption constantly: speculative decoding (multi-token prediction) accepts a run of tokens per step, proxies merge SSE frames, and some servers simply batch flush. When they do, `direct` undercounts by the batch size — and the _faster_ such a server runs, the larger its batches get, so the reading falls as the model speeds up. Measured against `qwen-flash-bebop` (LiteLLM → MTPLX): 15.4 tokens per delta at 137 tok/s, 20.7 tokens per delta at 190 tok/s, and a status bar pinned at ~9 tok/s for both.
 
-The `direct` strategy is fast and preserves the original behavior — it counts each streaming delta as 1 token, including toolcall deltas. Use `estimate` when your server streams in small chunks — it approximates the real token count from the delta text, giving a more meaningful TPS reading.
+`auto` counts what arrived instead of counting chunks. Each delta is scored in units — one per word run and one per symbol, and at least one for any non-empty delta — and units are converted to tokens by a ratio learned from the provider's own counts (see [Token Calibration](#token-calibration)). No configuration is needed to be right on a server that batches, one that streams a token at a time, or one that reports no usage at all.
 
-> **Note:** All assistant tool-call deltas are counted — the model generates every tool's arguments during decoding, so they all consume output tokens. Tool execution time is excluded via the timer-pause mechanism.
+`estimate` is `auto` without learning: the same text scoring, ratio pinned to 1. Use it if you want a count that never depends on what earlier turns reported.
+
+`direct` is kept for endpoints that genuinely emit one token per delta, where it is exactly right and needs no text at all.
+
+> **Note:** All assistant tool-call deltas are counted under every strategy — the model generates every tool's arguments during decoding, so they all consume output tokens. Tool execution time is excluded via the timer-pause mechanism.
+
+### Token Calibration
+
+Text scoring can approximate a tokenizer but never reproduce one, so the extension measures the gap instead of guessing at it. Every stream that ends with an authoritative count contributes one observation — `reported tokens / units counted` — and the ratio for that provider and model becomes the evidence-weighted mean of the observations taken so far.
+
+What that buys you:
+
+- **First turn on a new endpoint:** measured by text alone, so close rather than exact. Replaying two real 1200-token generations from a server that packs 15–17 tokens into every delta, at the default 1 s window: mean absolute error 6.4% on prose (mean reading 133.0 tok/s against a true 134.6) and 17.9% on code (173.7 against 157.1 — the text score runs about 5% rich on that code and the window's opening truncation adds the rest). `direct` on the same streams reads 9.3 and 9.5 tok/s: 93% error, because it measures the delta rate rather than the token rate. Widening `slidingWindow` trades reaction for accuracy — at 5 s the two figures become 4.8% and 10.2%.
+- **Later turns:** as accurate as that provider's own accounting, because it has already told you what its tokens were worth. The ratio is keyed on provider _and_ model, since one LiteLLM endpoint can front several tokenizers.
+- **End of every turn:** exact. The provider's reported count becomes the total and the history is scaled to match (see [Reconciliation](#reconciliation)), so whatever error the live reading carried is gone by the time the turn closes.
+- **Swapped servers:** a ratio describes a live endpoint, so it lives in memory for the session and is never written to your settings file.
+
+The ratio is bounded to 0.25–4 tokens per unit: outside that range the evidence is bad (a truncated stream, usage reported for something other than what was counted) rather than the tokenizer being exotic.
+
+To see it working, watch the reading stop jumping at end of turn. Corrections are applied while the correction is still visible; once the ratio has converged, the end-of-turn reconciliation changes nothing you can see.
+
+### Reconciliation
+
+At end of turn the provider's reported output-token count becomes the total, and the recorded history is **scaled** by the same factor rather than replaced:
+
+```
+counted 80 deltas = 80 tokens   provider says 1200 tokens   →   ×15
+```
+
+The reading, the token count and the sparkline bars all move together. Replacing only the total — which is what an earlier version did — left the status bar showing one rate for nineteen seconds and then jumping to another, and left the retained sparkline mixing an uncorrected stretch with a corrected one as if throughput had changed.
+
+Corrections inside 2% adjust the total but leave history alone; rescaling by 1.01× is invisible and skipping it keeps a converged session completely inert.
 
 ### Timer Pausing
 
@@ -349,7 +390,7 @@ Total history on screen is `sparklineBars × sparklineBarMs` (default `20 × 500
 
 **Gaps** (`sparklineGap`) control how a bar with no tokens is drawn: `low` (default) uses the shortest block so a stall reads as a flat line; `blank` uses a space so it reads as a break in the graph.
 
-**Reads as noise?** Three things dominate the trace. `updateInterval` defaults to `0`, redrawing on every delta — `100` or `200` calms it without hiding anything. `useProviderTokens: true` counts provider usage snapshots rather than stream deltas, and those arrive in lumps, so bars fill in bursts with empty slots between; the per-delta count traces a smoother line at the cost of accuracy. And a narrow `sparklineBarMs` makes the graph step sideways twice a second, where `1 s` reads as a slower scroll.
+**Reads as noise?** Three things dominate the trace. `updateInterval` defaults to `0`, redrawing on every delta — `100` or `200` calms it without hiding anything. `useProviderTokens: true` counts provider usage snapshots as they land, and servers that report them at all tend to report them in lumps, so bars fill in bursts with empty slots between; the `auto` count traces a smoother line and reconciles to the provider's total at end of turn anyway. And a narrow `sparklineBarMs` makes the graph step sideways twice a second, where `1 s` reads as a slower scroll.
 
 ```json
 {
@@ -471,14 +512,14 @@ The settings menu is described in detail in [Interactive Menu](#interactive-menu
 ## How It Works
 
 1. **Session Start** — Renders the initial status bar entry showing the configured icon and prefix label (default: `⚡ TPS: --`)
-2. **Message Start** — When a user message starts, TTFT measurement begins
+2. **Message Start** — When a user message starts, TTFT measurement begins. When an _assistant_ message starts, the engine marks a message boundary, because providers count output tokens cumulatively per assistant message and a turn that calls a tool streams more than one.
 3. **First Token & Streaming Start** — The moment the first content block starts (`text_start`, `thinking_start`, or `toolcall_start`), the TTFT is recorded and the streaming engine starts tracking
-4. **Token Update** — Each text, thinking, and tool-call delta is recorded. If `useProviderTokens` is `true` and the provider reports token counts, those are used directly; otherwise the extension's own counter (controlled by `countStrategy`) is used
-5. **Sliding Window** — TPS is calculated using a configurable time window of token timestamps. If all events in the window share the same timestamp (a flush after a stall), the span extends backward to include the gap. When streaming ends, behavior depends on `endTpsBehavior`:
+4. **Token Update** — Each text, thinking, and tool-call delta is scored in proxy units and converted to tokens by `countStrategy` (`auto` scales those units by a learned ratio; `estimate` uses them raw; `direct` counts one per delta). With `useProviderTokens` on, provider-reported counts steer the total as they arrive.
+5. **Sliding Window** — TPS is the tokens in the window divided by the window itself, truncated while the stream is younger than the window. When streaming ends, behavior depends on `endTpsBehavior`:
    - `average` (default): returns the overall average TPS for consistency with stats.
    - `last`: returns the last sliding window measurement.
 6. **Sparkline Buckets** — In parallel, tokens are summed into fixed-width time buckets (`sparklineBarMs`), each divided by its own width once the bucket closes. The `sparkline` display mode draws closed buckets as block glyphs, oldest first, scaled against a held peak that relaxes over time rather than against the tallest bar currently in view.
-7. **Agent End** — The authoritative token count (if available) is used to snap the total, ensuring the final average is exact. Streaming is stopped.
+7. **Agent End** — The authoritative token count (when the provider reports one) becomes the total, and the recorded history is scaled by the same factor so the reading, the count and the graph all move together; the ratio it implies is learned for the next turn. Streaming is stopped.
 
 ## Dependencies
 

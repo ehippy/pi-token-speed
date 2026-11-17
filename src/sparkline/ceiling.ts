@@ -58,6 +58,20 @@ export class PeakCeiling {
     return this.peak;
   }
 
+  /**
+   * Rescales the held peak by `factor`.
+   *
+   * The peak is measured in tokens per second, so when a correction rescales
+   * the bars it has to rescale the scale they are drawn against as well —
+   * otherwise the same bars change height purely because a total was corrected.
+   *
+   * @param factor Multiplier applied to the held peak.
+   */
+  scale(factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    this.peak *= factor;
+  }
+
   /** Forgets the held peak. */
   reset(): void {
     this.peak = 0;

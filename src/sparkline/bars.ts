@@ -109,6 +109,23 @@ export class TokenBars {
     return series;
   }
 
+  /**
+   * Rescales every retained bucket, e.g. when an authoritative token count
+   * reveals the local counter was off by a factor.
+   *
+   * History survives across turns, so an uncorrected stretch would sit next
+   * to a corrected one on the same vertical scale and read as a real change in
+   * throughput.
+   *
+   * @param factor Multiplier applied to each bucket's token count.
+   */
+  scale(factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    for (const [index, tokens] of this.buckets) {
+      this.buckets.set(index, tokens * factor);
+    }
+  }
+
   /** Discards all recorded buckets. */
   reset(): void {
     this.buckets = new Map();

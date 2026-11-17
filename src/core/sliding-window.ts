@@ -1,26 +1,58 @@
 import { COMPACTION_THRESHOLD, MIN_SLIDING_WINDOW } from "../config/constants";
 
+/** Tokens observed at a point in time. */
+interface TokenEvent {
+  /** Timestamp in milliseconds, on the caller's clock. */
+  time: number;
+  /** Tokens recorded at that instant. */
+  tokens: number;
+}
+
 /**
  * Time-based sliding window for calculating tokens-per-second.
  *
- * Records timestamped token events and calculates TPS by summing tokens
- * within the most recent window. Compacts old events periodically to
- * prevent unbounded memory growth.
+ * Records timestamped token events and reports the rate over the most recent
+ * `windowMs`, compacting the dead prefix periodically so memory cannot grow
+ * with the length of a session.
+ *
+ * **The window is the measurement interval.** The denominator is the window
+ * itself, truncated only while the stream is younger than the window. The rule
+ * this replaces measured the span *between* the arrivals inside the window,
+ * which turns a quiet tail into a rate multiplier: 10 tokens spread across the
+ * whole window and 10 tokens that all landed in its last 200ms read the same.
+ * Those are artifacts of *when* chunks crossed the network, not of decoding
+ * speed.
+ *
+ * **A buffered flush is still diluted.** Tokens that all arrive at one instant,
+ * with an earlier event behind them, are measured back to that event rather
+ * than over the window alone: a proxy that buffers was idle, and #12 asked for
+ * the rate to say so. The replaced rule applied that dilution to any sparse
+ * tail, which is where the inflation came from.
+ *
+ * **One clock.** Timestamps come from the caller, so the window and the
+ * elapsed-time average age at the same rate, and tests drive time directly
+ * instead of patching `Date.now()`.
  */
 export class SlidingWindow {
-  private readonly events: { time: number; tokens: number }[] = [];
+  private readonly events: TokenEvent[] = [];
   private windowStartIndex = 0;
+
+  /** Time of the first event recorded since the last `reset()`. */
+  private firstTime?: number;
 
   constructor(private readonly windowMs: number) {}
 
   /**
-   * Records a batch of tokens with the current timestamp.
-   * Compacts old events when the index reaches the compaction threshold.
+   * Records a batch of tokens at `now`.
    *
-   * @param tokens The number of tokens to record.
+   * Compacts old events when the dead prefix reaches the compaction threshold.
+   *
+   * @param tokens Tokens recorded.
+   * @param now Timestamp on the caller's clock, in milliseconds.
    */
-  record(tokens: number): void {
-    this.events.push({ time: Date.now(), tokens });
+  record(tokens: number, now: number): void {
+    this.events.push({ time: now, tokens });
+    this.firstTime ??= now;
 
     if (this.windowStartIndex >= COMPACTION_THRESHOLD) {
       this.compact();
@@ -28,16 +60,10 @@ export class SlidingWindow {
   }
 
   /**
-   * Calculates tokens-per-second within the sliding window.
+   * Tokens per second over the window, or 0 when the window holds no tokens.
    *
-   * Divides tokens in the window by the actual time span. When the span
-   * is artificially short (e.g. after a stall followed by a burst), extends
-   * the span to include the gap before the burst by looking at the last
-   * event before the window's first event.
-   *
-   * Returns 0 if no tokens are in the window.
-   *
-   * @param now Current timestamp in milliseconds.
+   * @param now Current timestamp in milliseconds, on the same clock as
+   *   the timestamps passed to `record()`.
    * @returns Tokens per second, or 0 if the window is empty.
    */
   getTps(now: number): number {
@@ -63,24 +89,49 @@ export class SlidingWindow {
 
     if (windowTokenCount === 0) return 0;
 
-    // Measure span from the first in-window event.
-    let spanStart = this.events[this.windowStartIndex].time;
+    // Measure over the window, but never over time that predates the stream:
+    // the first 200 tokens of a stream cannot evidence a rate older than
+    // themselves. The floor keeps a first flush that lands inside a single
+    // millisecond from claiming an absurd rate before there is anything to
+    // average over.
+    let spanStart = Math.max(windowStart, this.firstTime ?? windowStart);
 
-    // Check if all events in the window share the same timestamp.
-    // This indicates a flush after a stall (provider buffering),
-    // where all tokens arrive at once with no time between them.
-    const firstEventTime = this.events[this.windowStartIndex].time;
-    const lastEventTime = this.events[this.events.length - 1].time;
-    const allSameTimestamp = firstEventTime === lastEventTime;
-
-    // If all events are from the same timestamp and there's a previous
-    // event, extend the span to include the gap before the burst.
-    if (allSameTimestamp && this.windowStartIndex > 0) {
-      spanStart = this.events[this.windowStartIndex - 1].time;
+    // Tokens delivered entirely at one instant, after an earlier event, are a
+    // buffered flush rather than a burst of decoding: measuring them over the
+    // window they landed in credits them with a rate the stream never
+    // sustained. Extending back to the previous event attributes the quiet
+    // period honestly. Limited to a single instant on purpose — the replaced
+    // rule fired for sparse tails too, and inflated those.
+    const arrivedAtOneInstant =
+      this.events[this.windowStartIndex].time ===
+      this.events[this.events.length - 1].time;
+    if (arrivedAtOneInstant && this.windowStartIndex > 0) {
+      spanStart = Math.min(
+        spanStart,
+        this.events[this.windowStartIndex - 1].time,
+      );
     }
 
-    const span = Math.max(now - spanStart, MIN_SLIDING_WINDOW);
+    const floor = Math.min(MIN_SLIDING_WINDOW, this.windowMs);
+    const span = Math.max(now - spanStart, floor);
+
     return (1000 * windowTokenCount) / span;
+  }
+
+  /**
+   * Rescales every recorded batch, e.g. when an authoritative count reveals
+   * the local counter was off by a factor.
+   *
+   * Scaling rather than discarding: the window holds the measurement currently
+   * on screen, so a correction has to move it with the total it derives from.
+   *
+   * @param factor Multiplier applied to each batch's token count.
+   */
+  scale(factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    for (const event of this.events) {
+      event.tokens *= factor;
+    }
   }
 
   /**
@@ -99,5 +150,6 @@ export class SlidingWindow {
   reset(): void {
     this.events.length = 0;
     this.windowStartIndex = 0;
+    this.firstTime = undefined;
   }
 }

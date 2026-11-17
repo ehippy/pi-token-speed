@@ -81,6 +81,15 @@ const makeEngine = (
   return engine;
 };
 
+/**
+ * The renderer reads only `engine.tps`, so that is what a rendering test should
+ * pin. Writing the engine's private cache would quietly test nothing once the
+ * reading is taken from the sliding window instead of a cached field.
+ */
+function stubTps(engine: TokenSpeedEngine, value: number): void {
+  vi.spyOn(engine, "tps", "get").mockReturnValue(value);
+}
+
 const makeContext = (
   overrides?: Partial<ExtensionContext>,
 ): ExtensionContext => ({
@@ -196,7 +205,7 @@ describe("Renderer", () => {
   describe("render", () => {
     it("sets the status bar with the TPS measurement", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
-      engine["_tps"] = 42.5;
+      stubTps(engine, 42.5);
 
       (renderer as any).render(ctx);
 
@@ -210,7 +219,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
       configRef.current = makeConfig({ icon: "🚀" });
       renderer = new Renderer(engine, settings as any);
-      engine["_tps"] = 10;
+      stubTps(engine, 10);
 
       (renderer as any).render(ctx);
 
@@ -224,7 +233,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
       configRef.current = makeConfig({ icon: "" });
       renderer = new Renderer(engine, settings as any);
-      engine["_tps"] = 10;
+      stubTps(engine, 10);
 
       (renderer as any).render(ctx);
 
@@ -238,7 +247,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
       configRef.current = makeConfig({ prefix: "Speed" });
       renderer = new Renderer(engine, settings as any);
-      engine["_tps"] = 10;
+      stubTps(engine, 10);
 
       (renderer as any).render(ctx);
 
@@ -252,7 +261,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
       configRef.current = makeConfig({ prefix: "" });
       renderer = new Renderer(engine, settings as any);
-      engine["_tps"] = 10;
+      stubTps(engine, 10);
 
       (renderer as any).render(ctx);
 
@@ -266,7 +275,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
 
       // blazing tier — #00ccff = rgb(0, 204, 255)
-      engine["_tps"] = 150;
+      stubTps(engine, 150);
       (renderer as any).render(ctx);
       expect(setStatusSpy).toHaveBeenCalledWith(
         STATUS_KEY,
@@ -274,7 +283,7 @@ describe("Renderer", () => {
       );
 
       // fast tier — #44cc44 = rgb(68, 204, 68)
-      engine["_tps"] = 75;
+      stubTps(engine, 75);
       (renderer as any).render(ctx);
       expect(setStatusSpy).toHaveBeenCalledWith(
         STATUS_KEY,
@@ -282,7 +291,7 @@ describe("Renderer", () => {
       );
 
       // medium tier — #88cc00 = rgb(136, 204, 0)
-      engine["_tps"] = 40;
+      stubTps(engine, 40);
       (renderer as any).render(ctx);
       expect(setStatusSpy).toHaveBeenCalledWith(
         STATUS_KEY,
@@ -290,7 +299,7 @@ describe("Renderer", () => {
       );
 
       // slow tier — #ffcc00 = rgb(255, 204, 0)
-      engine["_tps"] = 20;
+      stubTps(engine, 20);
       (renderer as any).render(ctx);
       expect(setStatusSpy).toHaveBeenCalledWith(
         STATUS_KEY,
@@ -298,7 +307,7 @@ describe("Renderer", () => {
       );
 
       // below slow — no color (empty string)
-      engine["_tps"] = 5;
+      stubTps(engine, 5);
       (renderer as any).render(ctx);
       expect(setStatusSpy).toHaveBeenCalledWith(
         STATUS_KEY,
@@ -315,7 +324,7 @@ describe("Renderer", () => {
       const setStatusSpy = vi.spyOn(ctx.ui, "setStatus");
       configRef.current = makeConfig({ display: mode as any });
       renderer = new Renderer(engine, settings as any);
-      engine["_tps"] = 30;
+      stubTps(engine, 30);
 
       (renderer as any).render(ctx);
 

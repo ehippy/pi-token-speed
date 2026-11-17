@@ -10,7 +10,7 @@ export const defaultConfig: TokenSpeedConfig = {
   display: "tps",
   slidingWindow: 5000,
   useProviderTokens: false,
-  countStrategy: "direct",
+  countStrategy: "auto",
   endTpsBehavior: "average",
   icon: "⚡",
   prefix: "TPS",

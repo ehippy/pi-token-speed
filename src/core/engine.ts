@@ -20,6 +20,8 @@ export class TokenSpeedEngine {
   private _tokenCount = 0;
   private _startTime = 0;
   private _endTime = 0;
+  /** Whether a stream has ever started, so `_startTime` need not double as a sentinel. */
+  private _started = false;
 
   private _ttftStart = 0;
   private _ttftEnd = 0;
@@ -143,7 +145,7 @@ export class TokenSpeedEngine {
    * Returns elapsed milliseconds since stream start (0 if not started)
    */
   get elapsedMs(): number {
-    if (this._startTime === 0) return 0;
+    if (!this._started) return 0;
     if (this.isStreaming) return this.now() - this._startTime - this._pausedMs;
     return this._endTime - this._startTime - this._pausedMs;
   }
@@ -167,7 +169,16 @@ export class TokenSpeedEngine {
    * - `"last"`: returns the last sliding window measurement.
    */
   get tps(): number {
-    if (this._isStreaming) return this._tps;
+    if (this._isStreaming) {
+      // Read the window at the current instant, not at the last delta's. A rate
+      // that only changes when text arrives freezes through every gap, which is
+      // what a slow server spends most of its time showing: the number on
+      // screen belongs to the moment the last chunk landed. Held while paused,
+      // since a pause is not time the model was asked to account for.
+      return this._isPaused
+        ? this._tps
+        : this._slidingWindow.getTps(this.now());
+    }
     if (this._endTpsBehavior === "last") return this._tps;
     return this.tpsAvg;
   }
@@ -198,6 +209,7 @@ export class TokenSpeedEngine {
     this._isStreaming = true;
     this._startTime = this.now();
     this._endTime = this.now();
+    this._started = true;
     this._slidingWindow.reset();
     this._countedUsageOutput = 0;
     this._tps = 0;
@@ -255,9 +267,10 @@ export class TokenSpeedEngine {
   private recordTokens(tokens: number): void {
     if (!this._isStreaming || tokens <= 0) return;
 
+    const now = this.now();
     this._tokenCount += tokens;
-    this._slidingWindow.record(tokens);
-    this._tps = this._slidingWindow.getTps(this.now());
+    this._slidingWindow.record(tokens, now);
+    this._tps = this._slidingWindow.getTps(now);
   }
 
   /**

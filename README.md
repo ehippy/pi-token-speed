@@ -169,19 +169,22 @@ Per-provider overrides are managed separately via `/tps overrides` (see [Provide
 
 ### Sliding Window
 
-The sliding window determines how many recent tokens are used to calculate TPS. A larger window produces smoother readings at the cost of responsiveness; a smaller window reacts faster but can be noisier. To avoid burst spikes, the time span used in the calculation is clamped to a minimum threshold of 100ms.
+The sliding window determines how much recent activity is used to calculate TPS. A larger window produces smoother readings at the cost of responsiveness; a smaller window reacts faster but is noisier.
 
-#### Burst & Stall Handling
-
-When a provider buffers output and flushes it all at once, all tokens arrive with the same timestamp. In this case, the TPS calculation extends the time span backward to include the gap since the last token, giving a more representative reading:
+**The window is the measurement interval.** Tokens are summed over the last `slidingWindow` milliseconds and divided by that interval — not by the span between the first and last arrival inside it. Measuring the span instead makes a quiet stretch inside the window act as a divisor:
 
 ```
-20 tokens → 5s stall → 500 tokens flushed
+window 1000ms, reading taken at t=1150ms
+arrivals:  40 tokens at t=0   40 at t=100   10 at t=1100   10 at t=1150
+in window: the last two, 20 tokens
+
+measured over the window            →  20 tok/s
+measured over the arrivals' own span → 200 tok/s   (the 100ms floor)
 ```
 
-Without this handling, TPS would show `5000 tok/s` (500 tokens / 100ms clamp). With it, the reading reflects the actual throughput including the stall period (~100 tok/s).
+Both numbers describe when bytes crossed the network; only the first describes how fast the model decoded. A window that stays busy is unaffected — the two rules agree whenever arrivals span the window.
 
-A legitimate burst spread over time (different timestamps) is not affected — the span uses the actual time between the first and last token in the window.
+**A buffered flush is still attributed to its silence.** When everything in the window arrived at one instant after a quieter period, the interval extends back to the previous event, so a proxy that buffers for 5s and delivers 300 tokens reads ~60 tok/s rather than 300 for one refresh. This is deliberately limited to a single instant: applied to sparse arrivals as well, the same rule inflated the rate instead of deflating it.
 
 | Server speed        | Recommended window | Why                                                       |
 | ------------------- | ------------------ | --------------------------------------------------------- |
@@ -416,7 +419,7 @@ The settings menu is described in detail in [Interactive Menu](#interactive-menu
 2. **Message Start** — When a user message starts, TTFT measurement begins
 3. **First Token & Streaming Start** — The moment the first content block starts (`text_start`, `thinking_start`, or `toolcall_start`), the TTFT is recorded and the streaming engine starts tracking
 4. **Token Update** — Each text, thinking, and tool-call delta is recorded. If `useProviderTokens` is `true` and the provider reports token counts, those are used directly; otherwise the extension's own counter (controlled by `countStrategy`) is used
-5. **Sliding Window** — TPS is calculated using a configurable time window of token timestamps. If all events in the window share the same timestamp (a flush after a stall), the span extends backward to include the gap. When streaming ends, behavior depends on `endTpsBehavior`:
+5. **Sliding Window** — TPS is the tokens in the window divided by the window itself, truncated while the stream is younger than the window. When streaming ends, behavior depends on `endTpsBehavior`:
    - `average` (default): returns the overall average TPS for consistency with stats.
    - `last`: returns the last sliding window measurement.
 6. **Agent End** — The authoritative token count (if available) is used to snap the total, ensuring the final average is exact. Streaming is stopped.

@@ -247,6 +247,21 @@ describe("TokenSpeedEngine", () => {
       fresh.initialize();
       expect(fresh.tpsAvg).toBe(0);
     });
+
+    it("measures elapsed on a clock that starts at zero", () => {
+      // `_startTime` must not double as the "never started" marker: a clock
+      // whose first timestamp is 0 is legitimate, and reading it as "no stream"
+      // silently zeroed the average for the whole turn.
+      const testEngine = new TimeMockedEngine(settings, 0);
+      testEngine.initialize();
+      testEngine.start();
+      for (let i = 0; i < 200; i++) testEngine.recordDelta("x");
+      testEngine.tick(2000);
+      testEngine.stop();
+
+      expect(testEngine.elapsedMs).toBe(2000);
+      expect(testEngine.tpsAvg).toBeCloseTo(100, 5); // 200 tokens / 2 s
+    });
   });
 
   // ── stop ──────────────────────────────────────────────────────────────

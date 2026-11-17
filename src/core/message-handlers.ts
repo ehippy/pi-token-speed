@@ -3,21 +3,30 @@ import type { Renderer } from "../ui/renderer";
 import type { TokenSpeedEngine } from "./engine";
 import type { MessageHandler, MessageUpdatePayload } from "./message-handler";
 
+/** Which endpoint a stream is heading to, for config and calibration. */
+export interface StreamTarget {
+  providerId?: string;
+  modelId?: string;
+}
+
 /**
  * Handles stream-start events (text_start, thinking_start, toolcall_start).
  *
- * Applies provider overrides, stops the TTFT timer, and starts the engine.
+ * Applies the target's provider overrides, stops the TTFT timer, and starts the
+ * engine. The model id travels with the provider id because learned token ratios
+ * are keyed on both: one LiteLLM endpoint can front several tokenizers.
  */
 export class StreamStartHandler implements MessageHandler {
   readonly types = ["text_start", "thinking_start", "toolcall_start"];
 
   constructor(
     private readonly engine: TokenSpeedEngine,
-    private readonly getProvider: (ctx: ExtensionContext) => string | undefined,
+    private readonly getTarget: (ctx: ExtensionContext) => StreamTarget,
   ) {}
 
   handle(_event: MessageUpdatePayload, ctx: ExtensionContext): void {
-    this.engine.applyProvider(this.getProvider(ctx));
+    const { providerId, modelId } = this.getTarget(ctx);
+    this.engine.applyProvider(providerId, modelId);
     this.engine.stopTTFT();
     this.engine.start();
   }

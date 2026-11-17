@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { SettingsValidator } from "../src/config/settings-validator";
 import {
   MAX_SLIDING_WINDOW,
   MIN_SLIDING_WINDOW,
@@ -47,8 +48,21 @@ describe("validateConfig", () => {
   });
 
   it("corrects an invalid countStrategy to the default", () => {
-    const defaults = settings.getDefaultConfig();
-    expect(defaults.countStrategy).toBe("direct");
+    const result = new SettingsValidator().validateConfig({
+      ...settings.getDefaultConfig(),
+      countStrategy: "one-token-per-chunk" as "auto",
+    });
+    expect(result.valid).toBe(false);
+    expect(result.config.countStrategy).toBe("auto");
+  });
+
+  it("accepts an explicit count strategy", () => {
+    const result = new SettingsValidator().validateConfig({
+      ...settings.getDefaultConfig(),
+      countStrategy: "direct",
+    });
+    expect(result.valid).toBe(true);
+    expect(result.config.countStrategy).toBe("direct");
   });
 
   it("corrects an invalid endTpsBehavior to the default", () => {

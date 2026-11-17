@@ -27,7 +27,10 @@ export class EventManager {
   ) {
     this.registry = new MessageHandlerRegistry();
     this.registry.register(
-      new StreamStartHandler(engine, (ctx) => ctx.model?.provider),
+      new StreamStartHandler(engine, (ctx) => ({
+        providerId: ctx.model?.provider,
+        modelId: ctx.model?.id,
+      })),
     );
     this.registry.register(new DeltaHandler(engine, renderer));
     this.registry.register(new ToolcallDeltaHandler(engine, renderer));
@@ -49,7 +52,7 @@ export class EventManager {
     }
 
     this.engine.initialize();
-    this.engine.applyProvider(ctx.model?.provider);
+    this.engine.applyProvider(ctx.model?.provider, ctx.model?.id);
     this.renderer.initialize(ctx);
     this.renderer.resetThrottle();
   }
@@ -62,13 +65,23 @@ export class EventManager {
   }
 
   /**
-   * Starts TTFT measurement for user messages and begins streaming for assistant messages.
+   * Starts TTFT measurement for user messages, and marks the boundary for
+   * assistant messages.
+   *
+   * The boundary matters because providers count output tokens cumulatively per
+   * assistant message: a turn that calls a tool produces a second assistant
+   * message whose count starts over, and without knowing where one message ends
+   * and the next begins, that restart reads as the stream stalling at zero.
    *
    * @param event The message_start event payload.
    */
   handleMessageStart(event: { message?: { role?: string } }): void {
     if (event.message?.role === "user") {
       this.engine.startTTFT();
+      return;
+    }
+    if (event.message?.role === "assistant") {
+      this.engine.beginMessage();
     }
   }
 
@@ -94,16 +107,16 @@ export class EventManager {
   handleAgentEnd(event: AgentEndEvent, ctx: ExtensionContext): void {
     this.engine.stop();
 
-    // Only assistant and toolResult messages carry usage data
-    const outputTokens = event.messages.reduce((acc, curr) => {
-      if (curr.role === "assistant") {
-        return acc + curr.usage.output;
-      }
-      if (curr.role === "toolResult") {
-        return acc + (curr.usage?.output ?? 0);
-      }
-      return acc;
-    }, 0);
+    // Assistant messages only. `toolResult` messages can carry a usage block of
+    // their own — the accounting of a nested agent run — and this stream never
+    // counted those tokens. Folding them in would inflate the authoritative total
+    // relative to what was observed, and a correction based on that would teach
+    // the counter that this model produces more tokens per delta than it does.
+    const outputTokens = event.messages.reduce(
+      (acc, curr) =>
+        curr.role === "assistant" ? acc + curr.usage.output : acc,
+      0,
+    );
 
     this.engine.reconcileTotal(outputTokens);
     this.renderer.resetThrottle();

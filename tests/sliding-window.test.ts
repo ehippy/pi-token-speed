@@ -42,17 +42,21 @@ describe("SlidingWindow", () => {
   });
 
   it("never credits tokens to time before the first event", () => {
-    w.record(100, t0);
-    // Query 10s later but within a window that starts after the event: the
-    // interval is the window (1000ms), not the 10s since the event.
-    w.record(20, t0 + 9_000);
-    expect(w.getTps(t0 + 10_000)).toBeCloseTo(20, 5);
+    const wide = new SlidingWindow(2000);
+    wide.record(20, t0);
+    wide.record(10, t0 + 500);
+    wide.record(10, t0 + 800);
+    // The window reaches 1200ms before the stream began; the interval stops at
+    // the first event, so 40 tokens over 800ms rather than over 2s.
+    expect(wide.getTps(t0 + 800)).toBeCloseTo(50, 5);
   });
 
   it("excludes tokens recorded before the window from the count", () => {
     w.record(100, t0);
-    w.record(50, t0 + 1000);
-    // Only the second event is inside [t0+500, t0+1500]
+    w.record(25, t0 + 1000);
+    w.record(25, t0 + 1400);
+    // Only the last two are inside [t0+500, t0+1500]: 50 tokens over the whole
+    // window, not over the 400ms between them.
     expect(w.getTps(t0 + 1500)).toBeCloseTo(50, 5);
   });
 
@@ -61,12 +65,24 @@ describe("SlidingWindow", () => {
     expect(w.getTps(t0 + 10)).toBe(0);
   });
 
-  it("bounds a post-stall flush by the window instead of by its own span", () => {
-    // A provider that buffers, or a tool call, then a batch landing at once:
-    // measuring it over its own ~0ms span would read as thousands of tok/s.
+  it("measures a buffered flush against the quiet period it followed", () => {
+    // Issue #12: a proxy that buffers and flushes was idle, and a rate that
+    // ignores the silence reads as thousands of tok/s for one refresh.
     w.record(10, t0);
     w.record(300, t0 + 5000);
-    expect(w.getTps(t0 + 5000)).toBeCloseTo(300, 5);
+    // 300 tokens attributed across the 5s that produced them, not the 1000ms
+    // window they landed in (which would read 300) and not their own 0ms span.
+    expect(w.getTps(t0 + 5000)).toBeCloseTo(60, 5);
+  });
+
+  it("dilutes a flush, not a sparse tail", () => {
+    // The replaced rule applied the same dilution whenever the window held a
+    // single arrival, so a slow stream with a quiet tail read high instead.
+    w.record(10, t0);
+    w.record(15, t0 + 5000);
+    w.record(15, t0 + 5400);
+    // Two arrivals in the window: the interval is the window, 30 tokens/1s.
+    expect(w.getTps(t0 + 5400)).toBeCloseTo(30, 5);
   });
 
   it("scales recorded batches when an authoritative count corrects them", () => {

@@ -380,7 +380,16 @@ export class TokenSpeedEngine {
    * - `"last"`: returns the last sliding window measurement.
    */
   get tps(): number {
-    if (this._isStreaming) return this._tps;
+    if (this._isStreaming) {
+      // Read the window at the current instant, not at the last delta's. A rate
+      // that only changes when text arrives freezes through every gap, which is
+      // what a slow server spends most of its time showing: the number on
+      // screen belongs to the moment the last chunk landed. Held while paused,
+      // since a pause is not time the model was asked to account for.
+      return this._isPaused
+        ? this._tps
+        : this._slidingWindow.getTps(this.now());
+    }
     if (this._endTpsBehavior === "last") return this._tps;
     return this.tpsAvg;
   }

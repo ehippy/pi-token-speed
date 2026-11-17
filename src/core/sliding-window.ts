@@ -18,16 +18,20 @@ interface TokenEvent {
  * Two properties make the rate trustworthy at both speed extremes:
  *
  * **The window is the measurement interval.** The denominator is the window
- * itself, truncated only while the stream is younger than the window. The
- * alternative — dividing by `now - firstTokenInWindow` — turns any gap in
- * arrivals into a rate multiplier: a slow model that streams one token per
- * second reads 2 tok/s when the last token happened to land 500ms ago, and a
- * server that flushes a buffered batch reads thousands. Those spikes are
- * artifacts of *when* chunks crossed the network, not of decoding speed, and
- * they were the dominant noise on fast local servers. Trading them for a
- * window-average means a burst shorter than the window reads as the window's
- * average rate — which is what a window is for. The per-instant shape is not
- * lost: the sparkline histogram keeps it.
+ * itself, truncated only while the stream is younger than the window. The rule
+ * this replaces measured the span *between* the arrivals inside the window,
+ * which turns a quiet stretch into a rate multiplier: 20 tokens that all land
+ * inside the last 100ms of a 1s window read as 200 tok/s. Those are artifacts
+ * of *when* chunks crossed the network, not of decoding speed, and they were
+ * the dominant noise on fast local servers. A burst shorter than the window
+ * reads as the window's average rate — which is what a window is for, and the
+ * per-instant shape is not lost: the sparkline histogram keeps it.
+ *
+ * **A buffered flush is still diluted.** Tokens that all arrive at one instant,
+ * with an earlier event behind them, are measured back to that event rather
+ * than over the window alone: a proxy that buffers was idle, and #12 asked for
+ * the rate to say so. The replaced rule applied that dilution to any sparse
+ * tail as well, which is where the inflation came from.
  *
  * **One clock.** Timestamps come from the caller, so the window, the sparkline
  * buckets and the elapsed-time average all age at the same rate, and tests can
@@ -95,7 +99,23 @@ export class SlidingWindow {
     // flush of a fast server, which may land inside a single millisecond,
     // does not read as an absurd rate before the window has anything to
     // average over.
-    const spanStart = Math.max(windowStart, this.firstTime ?? windowStart);
+    let spanStart = Math.max(windowStart, this.firstTime ?? windowStart);
+
+    // Tokens delivered entirely at one instant, after an earlier event, are a
+    // buffered flush rather than a burst of decoding: measuring them over the
+    // window they landed in credits them with a rate the stream never
+    // sustained. Extending back to the previous event attributes the quiet
+    // period honestly. Limited to a single instant on purpose — the replaced
+    // rule fired for sparse tails too, and inflated those.
+    const arrivedAtOneInstant =
+      this.events[this.windowStartIndex].time ===
+      this.events[this.events.length - 1].time;
+    if (arrivedAtOneInstant && this.windowStartIndex > 0) {
+      spanStart = Math.min(
+        spanStart,
+        this.events[this.windowStartIndex - 1].time,
+      );
+    }
     const floor = Math.min(MIN_SLIDING_WINDOW, this.windowMs);
     const span = Math.max(now - spanStart, floor);
 

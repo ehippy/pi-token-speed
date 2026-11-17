@@ -184,15 +184,20 @@ Per-provider overrides are managed separately via `/tps overrides` (see [Provide
 
 The sliding window determines how much recent activity is used to calculate TPS. A larger window produces smoother readings at the cost of responsiveness; a smaller window reacts faster but is noisier.
 
-**The window is the measurement interval.** Tokens are summed over the last `slidingWindow` milliseconds and divided by that interval — not by the gap between the first and last arrival inside it. That distinction is what keeps the reading honest at both speed extremes:
+**The window is the measurement interval.** Tokens are summed over the last `slidingWindow` milliseconds and divided by that interval — not by the span between the first and last arrival inside it. Measuring the span instead makes a quiet stretch inside the window act as a divisor:
 
-| Situation                    | Why measuring the arrivals' own span lies                                                                |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Slow stream (1 token/s)      | One token that landed 60ms ago reads as 16 tok/s                                                         |
-| Buffered flush after a stall | 500 tokens delivered in one frame read as 5000 tok/s on a 100ms floor                                    |
-| Speculative decoding         | A server that accepts 20 tokens per step delivers them in one chunk, so the reading spikes on every step |
+```
+window 1000ms, reading taken at t=1150ms
+arrivals:  40 tokens at t=0   40 at t=100   10 at t=1100   10 at t=1150
+in window: the last two, 20 tokens
 
-Those artifacts come from _when_ bytes crossed the network, not from how fast the model decoded. Measuring over the window trades them for a smoothing effect: a burst shorter than the window reads as the window's average rate. Nothing about the burst is hidden — the [sparkline](#sparkline-history) histogram keeps the per-instant shape.
+measured over the window             →  20 tok/s
+measured over the arrivals' own span → 200 tok/s   (the 100ms floor)
+```
+
+Both numbers describe when bytes crossed the network; only the first describes how fast the model decoded. A window that stays busy is unaffected — the two rules agree whenever arrivals span the window. Nothing about a burst is hidden either: the [sparkline](#sparkline-history) histogram keeps the per-instant shape.
+
+**A buffered flush is attributed to its silence.** When everything in the window arrived at one instant after a quieter period, the interval extends back to the previous event, so a proxy that buffers for 5s and delivers 300 tokens reads ~60 tok/s rather than 300 for one refresh. This is deliberately limited to a single instant: applied to sparse arrivals as well, the same rule inflated the rate instead of deflating it.
 
 Two floors apply at the edges: the interval never shrinks below `100ms`, so the very first flush of a fast server cannot claim a rate over a fraction of a millisecond; and it never exceeds the window, so a stream's opening tokens are never credited to time before they existed.
 
